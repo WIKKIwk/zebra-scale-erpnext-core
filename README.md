@@ -1,6 +1,7 @@
 # GSCALE-ZEBRA
 
 Scale + Zebra RFID + Telegram Bot + ERPNext integratsiyasi uchun amaliy ishlab chiqilgan ko'p-modulli (Go workspace) tizim.
+Ushbu lokal nusxa hozir `gscale-zebra` remote'iga ulangan holda tekshirilmoqda.
 
 ## Annotatsiya
 Ushbu loyiha ishlab chiqarish yoki ombor sharoitida real tarozi o'qishini RFID markirovka va ERP hujjatlashtirish bilan bir zanjirga birlashtiradi. Tizimning asosiy g'oyasi: fizik o'lchovdan (qty) boshlab, RFID EPC yozish va ERPNext'da `Material Issue` draft yaratishgacha bo'lgan oqimni yarim-avtomatik emas, balki holatga asoslangan ishonchli pipeline ko'rinishida ishlatish.
