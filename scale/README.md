@@ -1,6 +1,6 @@
 # Scale monitor (TUI + Zebra) 📟
 
-`scale` moduli USB serial tarozi oqimini o'qiydi, Zebra holatini kuzatadi va auto EPC encode oqimini boshqaradi.
+`scale` moduli USB serial tarozi oqimini o'qiydi, Zebra holatini kuzatadi va bridge state orqali kelgan `print_request` buyruqlarini bajaradi.
 
 ## Ishga tushirish
 
@@ -31,17 +31,15 @@ Bu `scale` va `bot` service'larini systemd'ga o'rnatadi, enable qiladi va start 
 1. Serial port auto-detect qilinadi (`/dev/serial/by-id/*`, `ttyUSB*`, `ttyACM*`).
 2. Agar serial ishga tushmasa, HTTP bridge fallback ishlatiladi (`--bridge-url`).
 3. Har reading bridge snapshot'ga yoziladi (`scale` + `zebra`).
-4. `batch.active=true` bo'lsa auto encode ishlaydi, aks holda to'xtaydi.
-5. Stable qty topilganda EPC yaratiladi va Zebra encode command yuboriladi.
+4. `batch.active=true` bo'lsa ERP-first workflow ishlaydi, aks holda to'xtaydi.
+5. Bot tomonidan yozilgan `print_request` topilganda Zebra encode/print command yuboriladi.
 
-## Auto EPC qoidalari (joriy kod)
+## Print request qoidalari (joriy kod)
 
-- Faqat `> 0` qty uchun ishlaydi.
-- Qty taxminan `1s` barqaror tursa trigger bo'ladi.
-- Jitter filtri: epsilon `0.005`.
-- Bir xil nuqtada qayta-qayta trigger qilmaydi.
-- Yangi sikl ochilishi uchun qty oxirgi printed nuqtadan ma'noli o'zgarishi kerak.
-- Qty o'zgarib keyin oldingi qiymatga qaytsa ham, yana stable bo'lsa yangi EPC chiqadi.
+- `print_request.status = pending` bo'lsa worker uni ko'radi.
+- Aynan shu EPC allaqachon encode bo'lgan bo'lsa request `done` qilib yopiladi.
+- Zebra o'chirilgan bo'lsa request `error` holatiga o'tadi.
+- Encode ishlaganda request `processing` -> `done/error` oqimi bilan yuradi.
 
 ## Batch gate (`bridge_state.json`)
 
@@ -50,7 +48,7 @@ Bu `scale` va `bot` service'larini systemd'ga o'rnatadi, enable qiladi va start 
 
 Bot tomonda:
 
-- `Material Issue` => `batch.active=true`
+- `Material Receipt` => `batch.active=true`
 - `Batch Stop` => `batch.active=false`
 
 Scale TUI bu holatni `BATCH: ACTIVE/STOPPED` sifatida ko'rsatadi.

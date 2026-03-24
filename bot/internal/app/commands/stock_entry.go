@@ -8,8 +8,7 @@ import (
 	"bot/internal/telegram"
 )
 
-const StockEntryCallbackMaterialIssue = "stock:material_issue"
-const StockEntryCallbackReceipt = "stock:receipt"
+const StockEntryCallbackMaterialReceipt = "stock:material_receipt"
 const StockEntryCallbackBatchChangeItem = "stock:batch_change_item"
 const StockEntryCallbackBatchStart = "stock:batch_start"
 const StockEntryCallbackBatchStop = "stock:batch_stop"
@@ -55,8 +54,7 @@ func HandleWarehouseSelected(ctx context.Context, deps Deps, chatID int64, itemC
 	keyboard := &telegram.InlineKeyboardMarkup{
 		InlineKeyboard: [][]telegram.InlineKeyboardButton{
 			{
-				{Text: "Material Issue", CallbackData: StockEntryCallbackMaterialIssue},
-				{Text: "Receipt", CallbackData: StockEntryCallbackReceipt},
+				{Text: "Material Receipt", CallbackData: StockEntryCallbackMaterialReceipt},
 			},
 		},
 	}

@@ -11,6 +11,7 @@ import (
 	"bot/internal/config"
 	"bot/internal/erp"
 	"bot/internal/telegram"
+	corepkg "core"
 )
 
 type App struct {
@@ -20,6 +21,7 @@ type App struct {
 	qtyReader                *bridgeclient.Client
 	batchState               *batchstate.Store
 	epcHistory               *EPCHistory
+	epcGenerator             *corepkg.EPCGenerator
 	log                      *log.Logger
 	logRun                   *log.Logger
 	logBatch                 *log.Logger
@@ -76,6 +78,7 @@ func New(cfg config.Config, logger *log.Logger, runLogger *log.Logger, batchLogg
 		qtyReader:                bridgeclient.New(cfg.BridgeStateFile),
 		batchState:               batchstate.New(cfg.BridgeStateFile),
 		epcHistory:               NewEPCHistory(),
+		epcGenerator:             corepkg.NewEPCGenerator(),
 		log:                      logger,
 		logRun:                   runLogger,
 		logBatch:                 batchLogger,

@@ -19,7 +19,7 @@ func (a *App) handleMessage(ctx context.Context, msg telegram.Message) error {
 		a.rememberSelection(msg.Chat.ID, itemCode, itemName, warehouse)
 
 		if statusMessageID, pending := a.consumeBatchChangePending(msg.Chat.ID); pending {
-			a.startMaterialIssueBatch(ctx, msg.Chat.ID, SelectedContext{ItemCode: itemCode, ItemName: itemName, Warehouse: warehouse}, statusMessageID, "Item almashtirildi, oqim davom etmoqda")
+			a.startMaterialReceiptBatch(ctx, msg.Chat.ID, SelectedContext{ItemCode: itemCode, ItemName: itemName, Warehouse: warehouse}, statusMessageID, "Item almashtirildi, oqim davom etmoqda")
 			a.deleteTrackedBatchPromptMessage(ctx, msg.Chat.ID)
 			a.deleteTrackedWarehousePromptMessage(ctx, msg.Chat.ID)
 			a.deleteMessageBestEffort(ctx, msg.Chat.ID, msg.MessageID, "delete selected-warehouse warning")

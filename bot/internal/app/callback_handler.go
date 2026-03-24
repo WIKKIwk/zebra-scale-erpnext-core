@@ -13,21 +13,15 @@ import (
 )
 
 const (
-	epcWaitTimeout      = 6 * time.Second
-	epcWaitGraceTimeout = 1 * time.Second
-	epcWaitPollInterval = 140 * time.Millisecond
+	printResultTimeout      = 12 * time.Second
+	printResultPollInterval = 120 * time.Millisecond
 )
 
 func (a *App) handleCallbackQuery(ctx context.Context, q telegram.CallbackQuery) error {
 	data := strings.TrimSpace(q.Data)
 	switch data {
-	case commands.StockEntryCallbackMaterialIssue:
-		return a.handleMaterialIssueCallback(ctx, q)
-	case commands.StockEntryCallbackReceipt:
-		if err := a.tg.AnswerCallbackQuery(ctx, q.ID, "Receipt tez orada qo'shiladi"); err != nil {
-			return err
-		}
-		return nil
+	case commands.StockEntryCallbackMaterialReceipt:
+		return a.handleMaterialReceiptCallback(ctx, q)
 	case commands.StockEntryCallbackBatchChangeItem:
 		return a.handleBatchChangeItemCallback(ctx, q)
 	case commands.StockEntryCallbackBatchStart:
@@ -39,7 +33,7 @@ func (a *App) handleCallbackQuery(ctx context.Context, q telegram.CallbackQuery)
 	}
 }
 
-func (a *App) handleMaterialIssueCallback(ctx context.Context, q telegram.CallbackQuery) error {
+func (a *App) handleMaterialReceiptCallback(ctx context.Context, q telegram.CallbackQuery) error {
 	if q.Message == nil || q.Message.Chat.ID == 0 {
 		return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch boshlandi")
 	}
@@ -52,9 +46,15 @@ func (a *App) handleMaterialIssueCallback(ctx context.Context, q telegram.Callba
 		}
 		return a.tg.SendMessage(ctx, chatID, "Avval /batch orqali item va ombor tanlang.")
 	}
+	if a.hasBatchSession(chatID) {
+		return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch allaqachon ishlayapti")
+	}
+	if _, ok := a.otherActiveBatchOwner(chatID); ok {
+		return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch boshqa chatda ishlayapti")
+	}
 
 	a.clearBatchChangePending(chatID)
-	_ = a.startMaterialIssueBatch(ctx, chatID, sel, q.Message.MessageID, "Scale qty kutilmoqda...")
+	_ = a.startMaterialReceiptBatch(ctx, chatID, sel, q.Message.MessageID, "Scale qty kutilmoqda...")
 	return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch boshlandi")
 }
 
@@ -123,25 +123,27 @@ func (a *App) handleBatchStartCallback(ctx context.Context, q telegram.CallbackQ
 	if a.hasBatchSession(chatID) {
 		return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch allaqachon ishlayapti")
 	}
+	if _, ok := a.otherActiveBatchOwner(chatID); ok {
+		return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch boshqa chatda ishlayapti")
+	}
 
 	a.clearBatchChangePending(chatID)
-	_ = a.startMaterialIssueBatch(ctx, chatID, sel, q.Message.MessageID, "Batch qayta boshlandi: scale qty kutilmoqda...")
+	_ = a.startMaterialReceiptBatch(ctx, chatID, sel, q.Message.MessageID, "Batch qayta boshlandi: scale qty kutilmoqda...")
 	return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch qayta boshlandi")
 }
 
-func (a *App) startMaterialIssueBatch(ctx context.Context, chatID int64, sel SelectedContext, statusMessageID int64, note string) int64 {
+func (a *App) startMaterialReceiptBatch(ctx context.Context, chatID int64, sel SelectedContext, statusMessageID int64, note string) int64 {
 	initial := formatBatchStatusText(sel, 0, "", 0, "", "", "", strings.TrimSpace(note))
 	statusMessageID = a.upsertBatchStatusMessage(ctx, chatID, statusMessageID, initial)
 
 	a.startBatchSession(ctx, chatID, func(batchCtx context.Context) {
-		a.runMaterialIssueBatchLoop(batchCtx, chatID, sel, statusMessageID)
+		a.runMaterialReceiptBatchLoop(batchCtx, chatID, sel, statusMessageID)
 	})
 	return statusMessageID
 }
 
-func (a *App) runMaterialIssueBatchLoop(ctx context.Context, chatID int64, sel SelectedContext, statusMessageID int64) {
+func (a *App) runMaterialReceiptBatchLoop(ctx context.Context, chatID int64, sel SelectedContext, statusMessageID int64) {
 	draftCount := 0
-	lastEPC := ""
 	// Status matnida har safar oxirgi muvaffaqiyatli draftni ko'rsatamiz.
 	// Shunda EPC xatosidan keyin "Oxirgi QTY: 0.000 kg" ko'rinib qolmaydi.
 	lastDraftName := ""
@@ -177,87 +179,48 @@ func (a *App) runMaterialIssueBatchLoop(ctx context.Context, chatID int64, sel S
 			reading.UpdatedAt.Format(time.RFC3339Nano),
 		)
 
-		epc := ""
-		epcVerify := "UNKNOWN"
-		epcNote := ""
-		epcReading, err := a.qtyReader.WaitEPCForReading(ctx, epcWaitTimeout, epcWaitPollInterval, reading.UpdatedAt, lastEPC)
+		epc, draft, err := createDraftWithFreshEPC(
+			func() string {
+				return a.epcGenerator.Next(reading.UpdatedAt)
+			},
+			func(epc string) (erp.StockEntryDraft, error) {
+				return a.erp.CreateMaterialReceiptDraft(ctx, erp.MaterialReceiptDraftInput{
+					ItemCode:  sel.ItemCode,
+					Warehouse: sel.Warehouse,
+					Qty:       reading.Qty,
+					Barcode:   epc,
+				})
+			},
+		)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return
-			}
-			if isTimeoutLikeError(err) {
-				// Zebra tez javob beradi, lekin event propagation va polling race tufayli
-				// ba'zida EPC snapshot 6s oynadan ozgina keyin kelishi mumkin.
-				// Katta timeout bermaymiz, faqat qisqa grace-check qilamiz.
-				a.logBatch.Printf(
-					"batch epc wait timeout: chat=%d qty=%.3f timeout=%s, grace=%s",
-					chatID,
-					reading.Qty,
-					epcWaitTimeout,
-					epcWaitGraceTimeout,
-				)
-				graceReading, graceErr := a.qtyReader.WaitEPCForReading(ctx, epcWaitGraceTimeout, epcWaitPollInterval, reading.UpdatedAt, lastEPC)
-				if graceErr == nil {
-					epc = strings.ToUpper(strings.TrimSpace(graceReading.EPC))
-					epcVerify = strings.ToUpper(strings.TrimSpace(graceReading.Verify))
-					if epcVerify == "" {
-						epcVerify = "UNKNOWN"
-					}
-					a.logBatch.Printf(
-						"batch epc matched (grace): chat=%d qty=%.3f epc=%s verify=%s zebra_at=%s",
-						chatID,
-						reading.Qty,
-						epc,
-						epcVerify,
-						graceReading.UpdatedAt.Format(time.RFC3339Nano),
-					)
-				} else {
-					if errors.Is(graceErr, context.Canceled) || errors.Is(graceErr, context.DeadlineExceeded) {
-						return
-					}
-					epcNote = strings.TrimSpace(err.Error() + " | grace: " + graceErr.Error())
-				}
-			} else {
-				epcNote = err.Error()
-			}
-		} else {
-			epc = strings.ToUpper(strings.TrimSpace(epcReading.EPC))
-			epcVerify = strings.ToUpper(strings.TrimSpace(epcReading.Verify))
-			if epcVerify == "" {
-				epcVerify = "UNKNOWN"
-			}
-			a.logBatch.Printf(
-				"batch epc matched: chat=%d qty=%.3f epc=%s verify=%s zebra_at=%s",
+			a.logBatch.Printf("batch draft create error: chat=%d qty=%.3f epc=%s err=%v", chatID, reading.Qty, epc, err)
+			statusMessageID = a.upsertBatchStatusMessage(
+				ctx,
 				chatID,
-				reading.Qty,
-				epc,
-				epcVerify,
-				epcReading.UpdatedAt.Format(time.RFC3339Nano),
+				statusMessageID,
+				formatBatchStatusText(sel, draftCount, lastDraftName, lastDraftQty, lastDraftUnit, lastDraftEPC, lastDraftVerify, "ERP xato: "+err.Error()),
 			)
+			continue
 		}
-		if strings.TrimSpace(epc) != "" && !isRFIDVerifySuccess(epcVerify) {
-			epcNote = strings.TrimSpace(strings.Join([]string{
-				epcNote,
-				"RFID verify muvaffaqiyatsiz (VERIFY=" + epcVerify + ")",
-			}, " | "))
-			a.logBatch.Printf(
-				"batch epc verify warning (accepted): chat=%d qty=%.3f epc=%s verify=%s",
-				chatID,
-				reading.Qty,
-				epc,
-				epcVerify,
-			)
-		}
-		if strings.TrimSpace(epc) == "" {
-			a.logBatch.Printf(
-				"batch epc missing: chat=%d qty=%.3f reason=%s",
-				chatID,
-				reading.Qty,
-				strings.TrimSpace(epcNote),
-			)
-			note := "RFID yozilmadi (EPC olinmadi)"
-			if strings.TrimSpace(epcNote) != "" {
-				note = note + " | " + strings.TrimSpace(epcNote)
+		a.logBatch.Printf("batch draft created: chat=%d draft=%s qty=%.3f epc=%s", chatID, strings.TrimSpace(draft.Name), draft.Qty, epc)
+		a.setPrintRequest(epc, draft.Qty, reading.Unit, sel)
+
+		note := "Batch davom etmoqda | Print navbatga qo'yildi"
+		statusMessageID = a.upsertBatchStatusMessage(
+			ctx,
+			chatID,
+			statusMessageID,
+			formatBatchStatusText(sel, draftCount, lastDraftName, lastDraftQty, lastDraftUnit, lastDraftEPC, lastDraftVerify, note),
+		)
+
+		printResult, err := a.qtyReader.WaitPrintRequestResult(ctx, printResultTimeout, printResultPollInterval, epc)
+		a.clearPrintRequest()
+		if err != nil {
+			a.logBatch.Printf("batch print result error: chat=%d draft=%s epc=%s err=%v", chatID, strings.TrimSpace(draft.Name), epc, err)
+			deleteErr := a.erp.DeleteStockEntryDraft(ctx, draft.Name)
+			note := "Print xato: " + err.Error() + " | Draft delete qilindi"
+			if deleteErr != nil {
+				note = "Print xato: " + err.Error() + " | Draft delete xato: " + deleteErr.Error()
 			}
 			statusMessageID = a.upsertBatchStatusMessage(
 				ctx,
@@ -273,45 +236,54 @@ func (a *App) runMaterialIssueBatchLoop(ctx context.Context, chatID int64, sel S
 			continue
 		}
 
-		draft, err := a.erp.CreateMaterialIssueDraft(ctx, erp.MaterialIssueDraftInput{
-			ItemCode:  sel.ItemCode,
-			Warehouse: sel.Warehouse,
-			Qty:       reading.Qty,
-			Barcode:   epc,
-		})
-		if err != nil {
-			a.logBatch.Printf("batch draft create error: chat=%d qty=%.3f epc=%s err=%v", chatID, reading.Qty, epc, err)
+		if printResult.Status != "done" {
+			a.logBatch.Printf("batch print failed: chat=%d draft=%s epc=%s status=%s err=%s", chatID, strings.TrimSpace(draft.Name), epc, printResult.Status, printResult.Error)
+			deleteErr := a.erp.DeleteStockEntryDraft(ctx, draft.Name)
+			note := "Print xato"
+			if strings.TrimSpace(printResult.Error) != "" {
+				note += ": " + strings.TrimSpace(printResult.Error)
+			}
+			note += " | Draft delete qilindi"
+			if deleteErr != nil {
+				note = note + " | Delete xato: " + deleteErr.Error()
+			}
 			statusMessageID = a.upsertBatchStatusMessage(
 				ctx,
 				chatID,
 				statusMessageID,
-				formatBatchStatusText(sel, draftCount, lastDraftName, lastDraftQty, lastDraftUnit, lastDraftEPC, lastDraftVerify, "ERP xato: "+err.Error()),
+				formatBatchStatusText(sel, draftCount, lastDraftName, lastDraftQty, lastDraftUnit, lastDraftEPC, lastDraftVerify, note),
 			)
+			if err := a.qtyReader.WaitForNextCycle(ctx, 10*time.Minute, 220*time.Millisecond, reading.Qty); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return
+				}
+			}
 			continue
 		}
-		a.logBatch.Printf("batch draft created: chat=%d draft=%s qty=%.3f epc=%s", chatID, strings.TrimSpace(draft.Name), draft.Qty, epc)
-		a.epcHistory.Add(epc)
 
-		draftCount++
-		if epc != "" {
-			lastEPC = epc
+		if err := a.erp.SubmitStockEntryDraft(ctx, draft.Name); err != nil {
+			a.logBatch.Printf("batch draft submit error: chat=%d draft=%s epc=%s err=%v", chatID, strings.TrimSpace(draft.Name), epc, err)
+			statusMessageID = a.upsertBatchStatusMessage(
+				ctx,
+				chatID,
+				statusMessageID,
+				formatBatchStatusText(sel, draftCount, lastDraftName, lastDraftQty, lastDraftUnit, lastDraftEPC, lastDraftVerify, "Submit xato: "+err.Error()),
+			)
+			if err := a.qtyReader.WaitForNextCycle(ctx, 10*time.Minute, 220*time.Millisecond, reading.Qty); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return
+				}
+			}
+			continue
 		}
+
+		a.epcHistory.Add(epc)
+		draftCount++
 		lastDraftName = strings.TrimSpace(draft.Name)
 		lastDraftQty = draft.Qty
 		lastDraftUnit = reading.Unit
 		lastDraftEPC = epc
-		lastDraftVerify = epcVerify
-
-		note := "Batch davom etmoqda | RFID yozish tasdiqlandi"
-		if strings.TrimSpace(epcNote) != "" {
-			note = note + " | EPC ogohlantirish: " + strings.TrimSpace(epcNote)
-		}
-		statusMessageID = a.upsertBatchStatusMessage(
-			ctx,
-			chatID,
-			statusMessageID,
-			formatBatchStatusText(sel, draftCount, lastDraftName, lastDraftQty, lastDraftUnit, lastDraftEPC, lastDraftVerify, note),
-		)
+		lastDraftVerify = "OK"
 
 		for {
 			err := a.qtyReader.WaitForNextCycle(ctx, 10*time.Minute, 220*time.Millisecond, draft.Qty)
@@ -387,6 +359,9 @@ func formatRFIDConfirmLine(epc, verify string) string {
 	if strings.TrimSpace(epc) == "" {
 		return fmt.Sprintf("RFID holat: EPC yo'q (VERIFY=%s)", verify)
 	}
+	if verify == "PENDING" {
+		return fmt.Sprintf("RFID holat: chop etish navbatda (VERIFY=%s)", verify)
+	}
 	if !isRFIDVerifySuccess(verify) {
 		return fmt.Sprintf("RFID holat: yozish tasdiqlanmadi (VERIFY=%s)", verify)
 	}
@@ -400,17 +375,6 @@ func isRFIDVerifySuccess(verify string) bool {
 	default:
 		return false
 	}
-}
-
-func isTimeoutLikeError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	msg := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(msg, "timeout")
 }
 
 func formatSelectedItem(sel SelectedContext) string {

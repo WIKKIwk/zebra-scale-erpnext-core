@@ -3,7 +3,7 @@
 A multi-module (Go workspace) system built for Scale + Zebra RFID + Telegram Bot + ERPNext integration.
 
 ## Abstract
-This project integrates real-time weighing, RFID tagging, and ERP documentation into a single operational pipeline. The core idea is to move from physical measurement (quantity) to RFID EPC writing and ERPNext `Material Issue` draft creation using a state-driven and reliable workflow rather than fragmented manual steps.
+This project integrates real-time weighing, RFID tagging, and ERP documentation into a single operational pipeline. The core idea is to move from physical measurement (quantity) to ERPNext `Material Receipt` draft creation, then print the exact same EPC via Zebra, and finally submit the document through a state-driven reliable workflow rather than fragmented manual steps.
 
 As an applied institute project, this system demonstrates:
 - real-time signal processing;
@@ -37,7 +37,7 @@ When these are performed separately, human error, latency, and traceability issu
 
 ### Goal
 Build one integrated system that:
-- triggers EPC encoding when scale reading is stable;
+- detects a new cycle when scale reading becomes stable;
 - tracks Zebra result and status;
 - controls ERP draft creation based on batch state;
 - keeps all component states in one shared state file.
@@ -76,15 +76,17 @@ Main responsibilities:
 - poll Zebra status;
 - provide operator TUI (`q`, `e`, `r`);
 - write `scale` + `zebra` snapshots to bridge state;
-- perform auto-encode triggering via `core.StableEPCDetector`.
+- consume `print_request` commands from bridge state and execute printer actions.
 
 ### `bot` module
 Main responsibilities:
 - process Telegram commands: `/start`, `/batch`, `/log`, `/epc`;
 - item/warehouse selection from ERP using inline queries;
-- open/stop batch sessions (`Material Issue` callback);
-- wait for stable quantity + EPC from bridge state;
-- create `Stock Entry` (`Material Issue`) draft in ERPNext;
+- open/stop batch sessions (`Material Receipt` callback);
+- wait for stable quantity from bridge state;
+- create `Stock Entry` (`Material Receipt`) draft in ERPNext;
+- write `print_request` commands into bridge state;
+- submit or delete the draft based on print result;
 - keep in-memory EPC history for current bot session and export it as `.txt` (`/epc`).
 
 ### `bridge` module
@@ -95,8 +97,8 @@ Main responsibilities:
 
 ### `core` module
 Main responsibilities:
-- detect stable points from weight stream;
-- generate unique 24-hex EPC for each new stable cycle.
+- provide shared EPC generation logic;
+- generate unique 24-hex EPC for each new cycle.
 
 ### `zebra` module
 Main responsibilities:
@@ -108,10 +110,11 @@ Main responsibilities:
 Default file:
 - `/tmp/gscale-zebra/bridge_state.json`
 
-The snapshot has 3 main sections:
+The snapshot has 4 main sections:
 - `scale`: source, port, weight, unit, stable, error, updated_at
 - `zebra`: connected, device state, media state, last_epc, verify, action, error, updated_at
 - `batch`: active, chat_id, item_code, item_name, warehouse, updated_at
+- `print_request`: epc, qty, unit, item_code, item_name, status, error, requested_at, updated_at
 
 Example:
 ```json
@@ -145,18 +148,18 @@ Example:
 ```
 
 ## 5. Core Algorithms
-### 5.1 Stable quantity trigger (`core/StableEPCDetector`)
+### 5.1 Stable quantity cycle detection
 Parameters:
 - `StableFor = 1s`
 - `Epsilon = 0.005`
 - `MinWeight = 0.0`
 
 Rules:
-1. If `weight <= 0` or invalid, detector state is reset.
-2. Trigger occurs when stream stays within `|w - candidate| <= Epsilon` for `StableFor`.
-3. After one trigger, it does not re-trigger at the same stable point.
-4. A meaningful movement from last printed point is required for next trigger.
-5. If value moves and returns to previous point, it can still trigger as a new cycle.
+1. If `weight <= 0` or invalid, state may reset, but `0` is not a required condition for a new cycle.
+2. A stable point is accepted when the stream stays within `|w - candidate| <= Epsilon` for `StableFor`.
+3. A new cycle opens only after a real `movement/unstable` phase is observed after the previous stable point.
+4. The next stable point may be greater, smaller, or nearly equal to the previous one.
+5. The practical model is `stable -> movement -> next stable`.
 
 ### 5.2 EPC generation
 24-character uppercase hex format:
@@ -182,26 +185,32 @@ Successful `verify` values:
 ### 5.4 ERP draft creation criteria in bot
 Bot batch loop:
 1. Wait for stable positive quantity from bridge state.
-2. Wait for EPC corresponding to reading timestamp.
-3. Create ERP draft if EPC is present.
-4. If `verify` is not successful, current code still creates draft, but records warning in status/log.
+2. Generate EPC for the current cycle.
+3. Create ERP `Material Receipt` draft using that EPC.
+4. Write a `print_request` for the worker with the same EPC.
+5. Submit the draft on print success.
+6. Delete the draft on print failure.
 
 Note:
-- if EPC is missing, draft is not created.
+- if ERP reports a duplicate barcode before final print, a fresh candidate EPC is generated and retried.
 
 ## 6. Runtime Workflow
 ### 6.1 End-to-end batch sequence
 ```text
 Operator -> Telegram: /batch
 Bot -> ERP: item/warehouse search
-Operator -> Bot: Material Issue
+Operator -> Bot: Material Receipt
 Bot -> bridge_state: batch.active=true
 Scale -> bridge_state: live qty/stable
-Scale -> Zebra: EPC encode
-Scale -> bridge_state: last_epc + verify
-Bot <- bridge_state: stable qty + EPC
-Bot -> ERP: Stock Entry (Material Issue) draft
-Bot -> Telegram: status update (draft count, latest EPC)
+Bot <- bridge_state: stable qty
+Bot -> ERP: Stock Entry (Material Receipt) draft
+Bot -> bridge_state: print_request pending
+Scale <- bridge_state: print_request
+Scale -> Zebra: EPC encode/print
+Scale -> bridge_state: print_request done/error + zebra status
+Bot <- bridge_state: print result
+Bot -> ERP: submit (success) / delete (error)
+Bot -> Telegram: status update
 ```
 
 ### 6.2 Additional service commands

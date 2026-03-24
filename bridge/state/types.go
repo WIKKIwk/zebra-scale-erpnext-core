@@ -1,10 +1,11 @@
 package state
 
 type Snapshot struct {
-	Scale     ScaleSnapshot `json:"scale"`
-	Zebra     ZebraSnapshot `json:"zebra"`
-	Batch     BatchSnapshot `json:"batch"`
-	UpdatedAt string        `json:"updated_at,omitempty"`
+	Scale        ScaleSnapshot        `json:"scale"`
+	Zebra        ZebraSnapshot        `json:"zebra"`
+	Batch        BatchSnapshot        `json:"batch"`
+	PrintRequest PrintRequestSnapshot `json:"print_request"`
+	UpdatedAt    string               `json:"updated_at,omitempty"`
 }
 
 type ScaleSnapshot struct {
@@ -39,4 +40,16 @@ type BatchSnapshot struct {
 	ItemName  string `json:"item_name,omitempty"`
 	Warehouse string `json:"warehouse,omitempty"`
 	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+type PrintRequestSnapshot struct {
+	EPC         string   `json:"epc,omitempty"`
+	Qty         *float64 `json:"qty"`
+	Unit        string   `json:"unit,omitempty"`
+	ItemCode    string   `json:"item_code,omitempty"`
+	ItemName    string   `json:"item_name,omitempty"`
+	Status      string   `json:"status,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	RequestedAt string   `json:"requested_at,omitempty"`
+	UpdatedAt   string   `json:"updated_at,omitempty"`
 }

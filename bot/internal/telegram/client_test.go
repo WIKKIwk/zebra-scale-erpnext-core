@@ -31,7 +31,7 @@ func TestInlineKeyboardButton_EmptySwitchInlineQueryCurrentChatIsOmitted(t *test
 func TestInlineKeyboardButton_CallbackDataIsSerialized(t *testing.T) {
 	k := InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{{
-			{Text: "Material Issue", CallbackData: "stock:material_issue"},
+			{Text: "Material Receipt", CallbackData: "stock:material_receipt"},
 		}},
 	}
 
@@ -40,7 +40,7 @@ func TestInlineKeyboardButton_CallbackDataIsSerialized(t *testing.T) {
 		t.Fatalf("marshal error: %v", err)
 	}
 
-	const want = `"callback_data":"stock:material_issue"`
+	const want = `"callback_data":"stock:material_receipt"`
 	if !strings.Contains(string(b), want) {
 		t.Fatalf("expected %s in payload, got: %s", want, string(b))
 	}

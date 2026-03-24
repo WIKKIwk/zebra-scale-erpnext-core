@@ -4,7 +4,7 @@ Scale + Zebra RFID + Telegram Bot + ERPNext integratsiyasi uchun amaliy ishlab c
 Ushbu lokal nusxa hozir `gscale-zebra` remote'iga ulangan holda tekshirilmoqda.
 
 ## Annotatsiya
-Ushbu loyiha ishlab chiqarish yoki ombor sharoitida real tarozi o'qishini RFID markirovka va ERP hujjatlashtirish bilan bir zanjirga birlashtiradi. Tizimning asosiy g'oyasi: fizik o'lchovdan (qty) boshlab, RFID EPC yozish va ERPNext'da `Material Issue` draft yaratishgacha bo'lgan oqimni yarim-avtomatik emas, balki holatga asoslangan ishonchli pipeline ko'rinishida ishlatish.
+Ushbu loyiha ishlab chiqarish yoki ombor sharoitida real tarozi o'qishini RFID markirovka va ERP hujjatlashtirish bilan bir zanjirga birlashtiradi. Tizimning asosiy g'oyasi: fizik o'lchovdan (qty) boshlab, ERPNext'da `Material Receipt` draft yaratish, so'ng aynan shu EPC bilan Zebra orqali chop etish va yakunda hujjatni submit qilishgacha bo'lgan oqimni holatga asoslangan ishonchli pipeline ko'rinishida ishlatish.
 
 Loyiha institut amaliy ishi uchun mos ravishda quyidagilarni namoyish etadi:
 - real vaqtli signal oqimini qayta ishlash;
@@ -38,7 +38,7 @@ Bu bosqichlar alohida-alohida bajarilganda inson xatosi, vaqt yo'qotilishi va tr
 
 ### Maqsad
 Bitta integrallashgan tizim yaratish:
-- Scale o'qish barqaror bo'lganda EPC encode trigger qilish;
+- Scale o'qish barqaror bo'lganda yangi cycle'ni aniqlash;
 - Zebra natijasini status bilan kuzatish;
 - Batch holatiga qarab ERP draft yaratishni boshqarish;
 - Barcha komponentlar holatini bitta umumiy state faylga jamlash.
@@ -77,15 +77,17 @@ Asosiy vazifalar:
 - Zebra holatini polling qilish;
 - TUI orqali operator interfeysi (`q`, `e`, `r`);
 - bridge state'ga `scale` va `zebra` snapshot yozish;
-- `core.StableEPCDetector` orqali auto-encode trigger.
+- bridge state'dagi `print_request` buyruqlarini kuzatish va printerga ijro qilish.
 
 ### `bot` moduli
 Asosiy vazifalar:
 - Telegram komandalarni qabul qilish: `/start`, `/batch`, `/log`, `/epc`;
 - item/warehouse inline-qidiruv orqali ERP'dan tanlash;
-- batch session ochish/yopish (`Material Issue` tugmasi orqali);
-- bridge state'dan stable qty + EPC ni kutish;
-- ERPNext'da `Stock Entry` (`Material Issue`) draft yaratish;
+- batch session ochish/yopish (`Material Receipt` tugmasi orqali);
+- bridge state'dan stable qty ni kutish;
+- ERPNext'da `Stock Entry` (`Material Receipt`) draft yaratish;
+- `print_request` orqali worker'ga chop etish buyruq yuborish;
+- print natijasiga qarab draft'ni submit yoki delete qilish;
 - ish jarayonida ishlatilgan EPC'lar tarixini saqlash va `.txt` ko'rinishida yuborish (`/epc`).
 
 ### `bridge` moduli
@@ -96,8 +98,8 @@ Asosiy vazifalar:
 
 ### `core` moduli
 Asosiy vazifalar:
-- weight oqimidan barqaror nuqtalarni aniqlash;
-- har bir yangi barqaror sikl uchun unikal 24-hex EPC hosil qilish.
+- umumiy EPC generatsiya logikasini saqlash;
+- har bir yangi sikl uchun unikal 24-hex EPC hosil qilish.
 
 ### `zebra` moduli
 Asosiy vazifalar:
@@ -109,10 +111,11 @@ Asosiy vazifalar:
 Default fayl:
 - `/tmp/gscale-zebra/bridge_state.json`
 
-Snapshot 3 asosiy bo'limdan iborat:
+Snapshot 4 asosiy bo'limdan iborat:
 - `scale`: source, port, weight, unit, stable, error, updated_at
 - `zebra`: connected, device state, media state, last_epc, verify, action, error, updated_at
 - `batch`: active, chat_id, item_code, item_name, warehouse, updated_at
+- `print_request`: epc, qty, unit, item_code, item_name, status, error, requested_at, updated_at
 
 Namuna:
 ```json
@@ -146,18 +149,18 @@ Namuna:
 ```
 
 ## 5. Asosiy algoritmlar
-### 5.1 Stable qty trigger (`core/StableEPCDetector`)
+### 5.1 Stable qty cycle detection
 Parametrlar:
 - `StableFor = 1s`
 - `Epsilon = 0.005`
 - `MinWeight = 0.0`
 
 Qoidalar:
-1. `weight <= 0` yoki invalid qiymat bo'lsa holat reset bo'ladi.
-2. Oqim bir nuqtada `StableFor` davomida `|w - candidate| <= Epsilon` bo'lsa trigger chiqadi.
-3. Bir marta trigger bo'lgach, aynan o'sha nuqtada qayta trigger qilinmaydi.
-4. Yangi trigger uchun avvalgi printed nuqtadan ma'noli og'ish kerak.
-5. Og'ib, keyin oldingi qiymatga qaytsa ham yangi sikl sifatida trigger bo'lishi mumkin.
+1. `weight <= 0` yoki invalid qiymat bo'lsa holat reset bo'lishi mumkin, lekin `0` yangi cycle uchun majburiy shart emas.
+2. Oqim bir nuqtada `StableFor` davomida `|w - candidate| <= Epsilon` bo'lsa stable nuqta qabul qilinadi.
+3. Yangi cycle faqat oldingi stable holatdan keyin haqiqiy `movement/unstable` faza kuzatilganda ochiladi.
+4. Keyingi stable nuqta oldingisidan katta, kichik yoki hatto deyarli teng bo'lishi mumkin.
+5. Ma'no jihatdan model `stable -> movement -> next stable` ko'rinishida ishlaydi.
 
 ### 5.2 EPC generatsiya
 24 belgilik uppercase hex format:
@@ -183,26 +186,32 @@ Natija:
 ### 5.4 Botdagi draft yaratish mezoni
 Bot batch loop'i:
 1. bridge state'dan stable musbat qty kutadi.
-2. qty vaqtiga mos EPC ni kutadi.
-3. EPC bo'sh bo'lmasa ERP draft yaratadi.
-4. `verify` muvaffaqiyatsiz bo'lsa ham hozirgi kodda draft yaratiladi, lekin ogohlantirish log/statusda saqlanadi.
+2. shu cycle uchun EPC generatsiya qiladi.
+3. EPC bilan ERP `Material Receipt` draft yaratadi.
+4. `print_request` orqali worker'ga aynan shu EPC bilan chop etish buyruq yuboradi.
+5. print muvaffaqiyatli bo'lsa draft submit qilinadi.
+6. print muvaffaqiyatsiz bo'lsa draft delete qilinadi.
 
 Eslatma:
-- EPC bo'lmasa draft yaratilmaydi.
+- duplicate barcode aniqlansa, final printdan oldin yangi candidate EPC bilan qayta urinish qilinadi.
 
 ## 6. Ishlash oqimi
 ### 6.1 End-to-end batch ketma-ketligi
 ```text
 Operator -> Telegram: /batch
 Bot -> ERP: item/warehouse qidiruv
-Operator -> Bot: Material Issue
+Operator -> Bot: Material Receipt
 Bot -> bridge_state: batch.active=true
 Scale -> bridge_state: live qty/stable
-Scale -> Zebra: EPC encode
-Scale -> bridge_state: last_epc + verify
-Bot <- bridge_state: stable qty + EPC
-Bot -> ERP: Stock Entry (Material Issue) draft
-Bot -> Telegram: status update (draft count, oxirgi EPC)
+Bot <- bridge_state: stable qty
+Bot -> ERP: Stock Entry (Material Receipt) draft
+Bot -> bridge_state: print_request pending
+Scale <- bridge_state: print_request
+Scale -> Zebra: EPC encode/print
+Scale -> bridge_state: print_request done/error + zebra status
+Bot <- bridge_state: print result
+Bot -> ERP: submit (success) / delete (error)
+Bot -> Telegram: status update
 ```
 
 ### 6.2 Qo'shimcha servis komandalar

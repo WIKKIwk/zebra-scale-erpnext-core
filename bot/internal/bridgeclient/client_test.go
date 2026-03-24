@@ -37,36 +37,6 @@ func TestWaitStablePositiveReading_Stable(t *testing.T) {
 	}
 }
 
-func TestWaitEPCForReading(t *testing.T) {
-	d := t.TempDir()
-	p := filepath.Join(d, "bridge_state.json")
-	s := bridgestate.New(p)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.Update(func(snapshot *bridgestate.Snapshot) {
-		snapshot.Zebra.LastEPC = "3034257BF7194E406994036B"
-		snapshot.Zebra.Verify = "MATCH"
-		snapshot.Zebra.ReadLine1 = "ok"
-		snapshot.Zebra.UpdatedAt = now
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	c := New(p)
-	got, err := c.WaitEPCForReading(context.Background(), 500*time.Millisecond, 50*time.Millisecond, time.Now().Add(-1*time.Second), "")
-	if err != nil {
-		t.Fatalf("WaitEPCForReading error: %v", err)
-	}
-	if got.EPC != "3034257BF7194E406994036B" {
-		t.Fatalf("epc mismatch: %q", got.EPC)
-	}
-	if got.Verify != "MATCH" {
-		t.Fatalf("verify mismatch: %q", got.Verify)
-	}
-	if got.ReadLine1 != "ok" {
-		t.Fatalf("read line mismatch: %q", got.ReadLine1)
-	}
-}
-
 func TestWaitForNextCycle_ReturnsOnMeaningfulChange(t *testing.T) {
 	d := t.TempDir()
 	p := filepath.Join(d, "bridge_state.json")
@@ -128,5 +98,31 @@ func TestWaitForNextCycle_IgnoresTinyJitter(t *testing.T) {
 	err := c.WaitForNextCycle(context.Background(), 350*time.Millisecond, 40*time.Millisecond, 10.000)
 	if err == nil {
 		t.Fatal("expected timeout, got nil")
+	}
+}
+
+func TestWaitPrintRequestResult(t *testing.T) {
+	d := t.TempDir()
+	p := filepath.Join(d, "bridge_state.json")
+	s := bridgestate.New(p)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.Update(func(snapshot *bridgestate.Snapshot) {
+		snapshot.PrintRequest.EPC = "3034257BF7194E406994036B"
+		snapshot.PrintRequest.Status = "done"
+		snapshot.PrintRequest.UpdatedAt = now
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	c := New(p)
+	got, err := c.WaitPrintRequestResult(context.Background(), 500*time.Millisecond, 50*time.Millisecond, "3034257BF7194E406994036B")
+	if err != nil {
+		t.Fatalf("WaitPrintRequestResult error: %v", err)
+	}
+	if got.EPC != "3034257BF7194E406994036B" {
+		t.Fatalf("epc mismatch: %q", got.EPC)
+	}
+	if got.Status != "done" {
+		t.Fatalf("status mismatch: %q", got.Status)
 	}
 }

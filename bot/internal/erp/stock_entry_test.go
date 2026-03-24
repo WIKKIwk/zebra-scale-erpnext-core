@@ -3,22 +3,24 @@ package erp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-func TestCreateMaterialIssueDraft(t *testing.T) {
+func TestCreateMaterialReceiptDraft(t *testing.T) {
 	t.Helper()
 
 	type posted struct {
 		StockEntryType string `json:"stock_entry_type"`
 		Company        string `json:"company"`
-		FromWarehouse  string `json:"from_warehouse"`
+		ToWarehouse    string `json:"to_warehouse"`
 		Items          []struct {
 			ItemCode   string  `json:"item_code"`
-			Warehouse  string  `json:"s_warehouse"`
+			Warehouse  string  `json:"t_warehouse"`
 			Qty        float64 `json:"qty"`
 			UOM        string  `json:"uom"`
 			StockUOM   string  `json:"stock_uom"`
@@ -46,10 +48,10 @@ func TestCreateMaterialIssueDraft(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 				t.Fatalf("decode post payload: %v", err)
 			}
-			if p.StockEntryType != "Material Issue" {
+			if p.StockEntryType != "Material Receipt" {
 				t.Fatalf("stock_entry_type mismatch: %q", p.StockEntryType)
 			}
-			if p.Company != "Accord" || p.FromWarehouse != "Stores - A" {
+			if p.Company != "Accord" || p.ToWarehouse != "Stores - A" {
 				t.Fatalf("header fields mismatch: %+v", p)
 			}
 			if len(p.Items) != 1 {
@@ -71,14 +73,14 @@ func TestCreateMaterialIssueDraft(t *testing.T) {
 	defer ts.Close()
 
 	c := New(ts.URL, "k", "s")
-	draft, err := c.CreateMaterialIssueDraft(context.Background(), MaterialIssueDraftInput{
+	draft, err := c.CreateMaterialReceiptDraft(context.Background(), MaterialReceiptDraftInput{
 		ItemCode:  "ITEM-1",
 		Warehouse: "Stores - A",
 		Qty:       2.5,
 		Barcode:   "3034257BF7194E406994036B",
 	})
 	if err != nil {
-		t.Fatalf("CreateMaterialIssueDraft error: %v", err)
+		t.Fatalf("CreateMaterialReceiptDraft error: %v", err)
 	}
 	if draft.Name != "MAT-STE-2026-00001" {
 		t.Fatalf("draft name mismatch: %q", draft.Name)
@@ -91,10 +93,88 @@ func TestCreateMaterialIssueDraft(t *testing.T) {
 	}
 }
 
-func TestCreateMaterialIssueDraft_Validate(t *testing.T) {
+func TestCreateMaterialReceiptDraft_Validate(t *testing.T) {
 	c := New("https://example.invalid", "k", "s")
-	_, err := c.CreateMaterialIssueDraft(context.Background(), MaterialIssueDraftInput{ItemCode: "", Warehouse: "W", Qty: 1})
+	_, err := c.CreateMaterialReceiptDraft(context.Background(), MaterialReceiptDraftInput{ItemCode: "", Warehouse: "W", Qty: 1})
 	if err == nil || !strings.Contains(err.Error(), "item code") {
 		t.Fatalf("expected item code error, got: %v", err)
+	}
+}
+
+func TestSubmitStockEntryDraft(t *testing.T) {
+	t.Helper()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "token k:s" {
+			t.Fatalf("auth header mismatch: %q", got)
+		}
+
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/resource/Stock Entry/MAT-STE-2026-00001":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"doctype":"Stock Entry","name":"MAT-STE-2026-00001","docstatus":0}}`))
+			return
+		case r.Method == http.MethodPost && r.URL.Path == "/api/method/frappe.client.submit":
+			var payload struct {
+				Doc map[string]any `json:"doc"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode submit payload: %v", err)
+			}
+			if strings.TrimSpace(fmt.Sprint(payload.Doc["name"])) != "MAT-STE-2026-00001" {
+				t.Fatalf("submit doc mismatch: %+v", payload.Doc)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"message":{"name":"MAT-STE-2026-00001","docstatus":1}}`))
+			return
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL, "k", "s")
+	if err := c.SubmitStockEntryDraft(context.Background(), "MAT-STE-2026-00001"); err != nil {
+		t.Fatalf("SubmitStockEntryDraft error: %v", err)
+	}
+}
+
+func TestDeleteStockEntryDraft(t *testing.T) {
+	t.Helper()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "token k:s" {
+			t.Fatalf("auth header mismatch: %q", got)
+		}
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/resource/Stock Entry/MAT-STE-2026-00001" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"message":"ok"}`))
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL, "k", "s")
+	if err := c.DeleteStockEntryDraft(context.Background(), "MAT-STE-2026-00001"); err != nil {
+		t.Fatalf("DeleteStockEntryDraft error: %v", err)
+	}
+}
+
+func TestIsDuplicateBarcodeError(t *testing.T) {
+	cases := []struct {
+		errText string
+		want    bool
+	}{
+		{"erp stock entry http 417: barcode must be unique", true},
+		{"erp stock entry http 409: barcode already exists", true},
+		{"erp stock entry http 500: duplicate entry 'ABC' for key 'barcode'", true},
+		{"erp stock entry http 417: warehouse bo'sh", false},
+	}
+
+	for _, tc := range cases {
+		got := IsDuplicateBarcodeError(errors.New(tc.errText))
+		if got != tc.want {
+			t.Fatalf("IsDuplicateBarcodeError(%q) = %v want %v", tc.errText, got, tc.want)
+		}
 	}
 }

@@ -63,6 +63,17 @@ func (a *App) hasBatchSession(chatID int64) bool {
 	return ok
 }
 
+func (a *App) otherActiveBatchOwner(chatID int64) (int64, bool) {
+	a.batchMu.Lock()
+	defer a.batchMu.Unlock()
+	for ownerChatID := range a.batchByChat {
+		if ownerChatID != 0 && ownerChatID != chatID {
+			return ownerChatID, true
+		}
+	}
+	return 0, false
+}
+
 func (a *App) stopAllBatchSessions() {
 	a.batchMu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(a.batchByChat))

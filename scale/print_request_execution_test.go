@@ -1,0 +1,68 @@
+package main
+
+import (
+	bridgestate "bridge/state"
+	"path/filepath"
+	"testing"
+)
+
+func TestDecidePendingPrintRequest(t *testing.T) {
+	req := bridgestate.PrintRequestSnapshot{
+		EPC:    "3034257BF7194E406994036B",
+		Status: "pending",
+	}
+
+	if got := decidePendingPrintRequest(req, ZebraStatus{}, "", false); got != printRequestErrorDisabled {
+		t.Fatalf("disabled decision mismatch: got=%s", got)
+	}
+
+	if got := decidePendingPrintRequest(req, ZebraStatus{}, "", true); got != printRequestExecute {
+		t.Fatalf("execute decision mismatch: got=%s", got)
+	}
+
+	if got := decidePendingPrintRequest(req, ZebraStatus{}, "3034257BF7194E406994036B", true); got != printRequestNoop {
+		t.Fatalf("active request should noop: got=%s", got)
+	}
+
+	zebra := ZebraStatus{LastEPC: "3034257BF7194E406994036B"}
+	if got := decidePendingPrintRequest(req, zebra, "", true); got != printRequestMarkDone {
+		t.Fatalf("matching epc should mark done: got=%s", got)
+	}
+}
+
+func TestWritePrintRequestStatus_UpdatesMatchingEPCOnly(t *testing.T) {
+	d := t.TempDir()
+	p := filepath.Join(d, "bridge_state.json")
+	s := bridgestate.New(p)
+
+	qty := 2.5
+	if err := s.Update(func(snapshot *bridgestate.Snapshot) {
+		snapshot.PrintRequest.EPC = "3034257BF7194E406994036B"
+		snapshot.PrintRequest.Qty = &qty
+		snapshot.PrintRequest.Status = "pending"
+	}); err != nil {
+		t.Fatalf("seed update error: %v", err)
+	}
+
+	if err := writePrintRequestStatus(s, "AAAAAAAAAAAAAAAAAAAAAAAA", "done", ""); err != nil {
+		t.Fatalf("write status mismatch epc error: %v", err)
+	}
+	got, err := s.Read()
+	if err != nil {
+		t.Fatalf("read error: %v", err)
+	}
+	if got.PrintRequest.Status != "pending" {
+		t.Fatalf("status should stay pending for mismatched epc: %q", got.PrintRequest.Status)
+	}
+
+	if err := writePrintRequestStatus(s, "3034257BF7194E406994036B", "done", ""); err != nil {
+		t.Fatalf("write status error: %v", err)
+	}
+	got, err = s.Read()
+	if err != nil {
+		t.Fatalf("read error: %v", err)
+	}
+	if got.PrintRequest.Status != "done" {
+		t.Fatalf("status mismatch: %q", got.PrintRequest.Status)
+	}
+}

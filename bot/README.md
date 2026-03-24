@@ -24,13 +24,13 @@ go run ./cmd/bot
 1. `/batch` beriladi.
 2. `Item tanlash` inline tugmasi orqali ERP item tanlanadi.
 3. `Ombor tanlash` inline tugmasi orqali warehouse tanlanadi.
-4. Bot `Material Issue` yoki `Receipt` tugmalarini ko'rsatadi.
-5. `Material Issue` bosilganda batch session ishga tushadi.
+4. Bot `Material Receipt` tugmasini ko'rsatadi.
+5. `Material Receipt` bosilganda batch session ishga tushadi.
 6. Scale'dan `stable + musbat qty` keladi.
-7. Zebra'dan EPC olinadi va `VERIFY` tekshiriladi.
-8. Faqat `VERIFY=MATCH|OK|WRITTEN` bo'lsa ERPNext draft yaratiladi.
-
-`Receipt` hozir placeholder holatda (`tez orada qo'shiladi`).
+7. Bot shu cycle uchun EPC generatsiya qiladi va ERPNext draft yaratadi.
+8. Bot bridge state'ga `print_request` yozadi.
+9. Scale worker print natijasini qaytaradi.
+10. Print muvaffaqiyatli bo'lsa draft submit qilinadi, aks holda delete qilinadi.
 
 ## Batch boshqaruv tugmalari
 
@@ -45,7 +45,7 @@ Shared snapshot fayl:
 - default: `/tmp/gscale-zebra/bridge_state.json`
 - config: `BRIDGE_STATE_FILE`
 
-Bot `batch` bo'limini shu faylga yozadi, `scale` esa shu holatga qarab auto-print gate qiladi.
+Bot `batch` va `print_request` bo'limlarini shu faylga yozadi, `scale` esa shu holatga qarab print command'larni ijro qiladi.
 
 ## Konfiguratsiya (`.env`)
 

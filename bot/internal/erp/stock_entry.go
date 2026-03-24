@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-type MaterialIssueDraftInput struct {
+type MaterialReceiptDraftInput struct {
 	ItemCode  string
 	Warehouse string
 	Qty       float64
@@ -47,7 +47,15 @@ type createStockEntryResponse struct {
 	} `json:"data"`
 }
 
-func (c *Client) CreateMaterialIssueDraft(ctx context.Context, in MaterialIssueDraftInput) (StockEntryDraft, error) {
+type stockEntryResourceResponse struct {
+	Data map[string]any `json:"data"`
+}
+
+type stockEntryMethodResponse struct {
+	Message map[string]any `json:"message"`
+}
+
+func (c *Client) CreateMaterialReceiptDraft(ctx context.Context, in MaterialReceiptDraftInput) (StockEntryDraft, error) {
 	in.ItemCode = strings.TrimSpace(in.ItemCode)
 	in.Warehouse = strings.TrimSpace(in.Warehouse)
 	in.Barcode = strings.ToUpper(strings.TrimSpace(in.Barcode))
@@ -76,7 +84,7 @@ func (c *Client) CreateMaterialIssueDraft(ctx context.Context, in MaterialIssueD
 
 	item := map[string]any{
 		"item_code":         in.ItemCode,
-		"s_warehouse":       in.Warehouse,
+		"t_warehouse":       in.Warehouse,
 		"qty":               in.Qty,
 		"uom":               uom,
 		"stock_uom":         uom,
@@ -87,9 +95,9 @@ func (c *Client) CreateMaterialIssueDraft(ctx context.Context, in MaterialIssueD
 	}
 
 	payload := map[string]any{
-		"stock_entry_type": "Material Issue",
+		"stock_entry_type": "Material Receipt",
 		"company":          company,
-		"from_warehouse":   in.Warehouse,
+		"to_warehouse":     in.Warehouse,
 		"items":            []map[string]any{item},
 	}
 
@@ -129,6 +137,115 @@ func (c *Client) CreateMaterialIssueDraft(ctx context.Context, in MaterialIssueD
 		UOM:       uom,
 		Barcode:   in.Barcode,
 	}, nil
+}
+
+func (c *Client) SubmitStockEntryDraft(ctx context.Context, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("stock entry name bo'sh")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/resource/Stock%20Entry/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	c.setAuthHeader(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("erp stock entry get http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var doc stockEntryResourceResponse
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return fmt.Errorf("erp stock entry get json parse xato: %w", err)
+	}
+	if len(doc.Data) == 0 {
+		return fmt.Errorf("erp stock entry doc bo'sh: %s", name)
+	}
+
+	payload := map[string]any{"doc": doc.Data}
+	body, _ = json.Marshal(payload)
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/method/frappe.client.submit", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	c.setAuthHeader(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ = io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("erp stock entry submit http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var out stockEntryMethodResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return fmt.Errorf("erp stock entry submit json parse xato: %w", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(out.Message["name"])); got != "" && got != name {
+		return fmt.Errorf("erp stock entry submit name mismatch: %s", got)
+	}
+	return nil
+}
+
+func (c *Client) DeleteStockEntryDraft(ctx context.Context, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("stock entry name bo'sh")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/api/resource/Stock%20Entry/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	c.setAuthHeader(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("erp stock entry delete http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func IsDuplicateBarcodeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	if strings.Contains(msg, "barcode") && strings.Contains(msg, "duplicate") {
+		return true
+	}
+	if strings.Contains(msg, "barcode") && strings.Contains(msg, "already exists") {
+		return true
+	}
+	if strings.Contains(msg, "barcode") && strings.Contains(msg, "unique") {
+		return true
+	}
+	if strings.Contains(msg, "duplicate entry") && strings.Contains(msg, "barcode") {
+		return true
+	}
+	return false
 }
 
 func (c *Client) lookupWarehouseCompany(ctx context.Context, warehouse string) (string, error) {

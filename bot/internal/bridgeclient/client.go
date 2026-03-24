@@ -24,11 +24,10 @@ type StableReading struct {
 	UpdatedAt time.Time
 }
 
-type EPCReading struct {
+type PrintRequestResult struct {
 	EPC       string
-	Verify    string
-	ReadLine1 string
-	ReadLine2 string
+	Status    string
+	Error     string
 	UpdatedAt time.Time
 }
 
@@ -114,26 +113,29 @@ func (c *Client) WaitStablePositiveReading(ctx context.Context, timeout, pollInt
 	}
 }
 
-func (c *Client) WaitEPCForReading(ctx context.Context, timeout, pollInterval time.Duration, after time.Time, lastEPC string) (EPCReading, error) {
+func (c *Client) WaitPrintRequestResult(ctx context.Context, timeout, pollInterval time.Duration, epc string) (PrintRequestResult, error) {
 	if c == nil || c.store == nil || strings.TrimSpace(c.store.Path()) == "" {
-		return EPCReading{}, fmt.Errorf("bridge state path bo'sh")
+		return PrintRequestResult{}, fmt.Errorf("bridge state path bo'sh")
 	}
 	if timeout <= 0 {
-		timeout = 6 * time.Second
+		timeout = 10 * time.Second
 	}
 	if pollInterval <= 0 {
-		pollInterval = 140 * time.Millisecond
+		pollInterval = 120 * time.Millisecond
 	}
-	lastEPC = strings.ToUpper(strings.TrimSpace(lastEPC))
+	epc = strings.ToUpper(strings.TrimSpace(epc))
+	if epc == "" {
+		return PrintRequestResult{}, fmt.Errorf("print request epc bo'sh")
+	}
 
 	deadline := time.Now().Add(timeout)
 	for {
 		if time.Now().After(deadline) {
-			return EPCReading{}, fmt.Errorf("epc timeout (%s)", timeout)
+			return PrintRequestResult{}, fmt.Errorf("print request timeout (%s)", timeout)
 		}
 		select {
 		case <-ctx.Done():
-			return EPCReading{}, ctx.Err()
+			return PrintRequestResult{}, ctx.Err()
 		default:
 		}
 
@@ -143,35 +145,25 @@ func (c *Client) WaitEPCForReading(ctx context.Context, timeout, pollInterval ti
 			continue
 		}
 
-		epc := strings.ToUpper(strings.TrimSpace(snap.Zebra.LastEPC))
-		if epc == "" || epc == lastEPC {
+		req := snap.PrintRequest
+		gotEPC := strings.ToUpper(strings.TrimSpace(req.EPC))
+		if gotEPC != epc {
 			time.Sleep(pollInterval)
 			continue
 		}
 
-		epcAt, ok := parseSnapshotTime(snap.Zebra.UpdatedAt)
-		if ok {
-			if !isFreshTime(epcAt, 15*time.Second) {
-				time.Sleep(pollInterval)
-				continue
-			}
-			if !after.IsZero() && epcAt.Before(after.Add(-300*time.Millisecond)) {
-				time.Sleep(pollInterval)
-				continue
-			}
+		status := strings.ToLower(strings.TrimSpace(req.Status))
+		if status != "done" && status != "error" {
+			time.Sleep(pollInterval)
+			continue
 		}
 
-		verify := strings.ToUpper(strings.TrimSpace(snap.Zebra.Verify))
-		if verify == "" {
-			verify = "UNKNOWN"
-		}
-
-		return EPCReading{
-			EPC:       epc,
-			Verify:    verify,
-			ReadLine1: strings.TrimSpace(snap.Zebra.ReadLine1),
-			ReadLine2: strings.TrimSpace(snap.Zebra.ReadLine2),
-			UpdatedAt: epcAt,
+		at, _ := parseSnapshotTime(req.UpdatedAt)
+		return PrintRequestResult{
+			EPC:       gotEPC,
+			Status:    status,
+			Error:     strings.TrimSpace(req.Error),
+			UpdatedAt: at,
 		}, nil
 	}
 }

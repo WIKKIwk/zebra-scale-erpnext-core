@@ -3,7 +3,6 @@ package main
 import (
 	bridgestate "bridge/state"
 	"context"
-	corepkg "core"
 	"fmt"
 	"strings"
 	"time"
@@ -25,22 +24,23 @@ type quitMsg struct{}
 type clockMsg time.Time
 
 type tuiModel struct {
-	ctx            context.Context
-	updates        <-chan Reading
-	zebraUpdates   <-chan ZebraStatus
-	sourceLine     string
-	zebraPreferred string
-	bridgeStore    *bridgestate.Store
-	batchState     *batchStateReader
-	batchActive    bool
-	message        string
-	info           string
-	last           Reading
-	zebra          ZebraStatus
-	width          int
-	height         int
-	now            time.Time
-	autoDetector   *corepkg.StableEPCDetector
+	ctx                   context.Context
+	updates               <-chan Reading
+	zebraUpdates          <-chan ZebraStatus
+	sourceLine            string
+	zebraPreferred        string
+	bridgeStore           *bridgestate.Store
+	batchState            *batchStateReader
+	printRequest          *printRequestReader
+	batchActive           bool
+	message               string
+	info                  string
+	last                  Reading
+	zebra                 ZebraStatus
+	width                 int
+	height                int
+	now                   time.Time
+	activePrintRequestEPC string
 }
 
 func runTUI(ctx context.Context, updates <-chan Reading, zebraUpdates <-chan ZebraStatus, sourceLine string, zebraPreferred string, bridgeStateFile string, autoWhenNoBatch bool, serialErr error) error {
@@ -52,12 +52,12 @@ func runTUI(ctx context.Context, updates <-chan Reading, zebraUpdates <-chan Zeb
 		zebraPreferred: zebraPreferred,
 		bridgeStore:    bridgestate.New(bridgeStateFile),
 		batchState:     newBatchStateReader(bridgeStateFile, autoWhenNoBatch),
+		printRequest:   newPrintRequestReader(bridgeStateFile),
 		batchActive:    true,
 		last:           Reading{Unit: "kg"},
 		message:        "scale oqimi kutilmoqda",
 		info:           "ready",
 		now:            time.Now(),
-		autoDetector:   corepkg.NewStableEPCDetector(corepkg.DefaultStableEPCConfig()),
 		zebra: ZebraStatus{
 			Connected: false,
 			Verify:    "-",
@@ -102,7 +102,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "e":
 			if !m.batchActive {
-				m.info = "batch inactive: botda Material Issue ni bosing"
+				m.info = "batch inactive: botda Material Receipt ni bosing"
 				return m, nil
 			}
 			if m.zebraUpdates == nil {
@@ -117,7 +117,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, runEncodeEPCCmd(m.zebraPreferred, m.last.Weight, m.last.Unit, itemName)
 		case "r":
 			if !m.batchActive {
-				m.info = "batch inactive: botda Material Issue ni bosing"
+				m.info = "batch inactive: botda Material Receipt ni bosing"
 				return m, nil
 			}
 			if m.zebraUpdates == nil {
@@ -141,9 +141,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if prevBatchActive != m.batchActive {
 			if m.batchActive {
-				m.info = "batch active: auto print yoqildi"
+				m.info = "batch active: ERP workflow yoqildi"
 			} else {
-				m.info = "batch inactive: auto print to'xtadi"
+				m.info = "batch inactive: ERP workflow to'xtadi"
 			}
 		}
 
@@ -159,26 +159,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		cmd := waitForReadingCmd(m.ctx, m.updates)
 		if !m.batchActive {
-			if m.autoDetector != nil {
-				m.autoDetector.Observe(nil, upd.UpdatedAt)
-			}
 			return m, cmd
-		}
-
-		if m.zebraUpdates != nil && m.autoDetector != nil {
-			if upd.Weight != nil {
-				if epc, ok := m.autoDetector.Observe(upd.Weight, upd.UpdatedAt); ok {
-					m.info = fmt.Sprintf("auto encode queued: epc=%s", epc)
-					itemName := ""
-					if m.batchState != nil {
-						itemName = m.batchState.ItemLabel(upd.UpdatedAt)
-					}
-					cmd = tea.Batch(cmd, runEncodeEPCCmdWithEPC(m.zebraPreferred, epc, upd.Weight, upd.Unit, itemName))
-				}
-			} else if strings.TrimSpace(upd.Error) != "" {
-				// Connection/read errors should reset stability window.
-				m.autoDetector.Observe(nil, upd.UpdatedAt)
-			}
 		}
 		return m, cmd
 	case zebraMsg:
@@ -186,6 +167,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.zebra = st
 		if err := writeBridgeStateSnapshot(m.bridgeStore, m.last, m.zebra); err != nil {
 			m.info = "bridge snapshot xato: " + err.Error()
+		}
+		if m.activePrintRequestEPC != "" && strings.EqualFold(strings.TrimSpace(st.Action), "encode") {
+			status := "done"
+			errText := ""
+			if strings.TrimSpace(st.Error) != "" {
+				status = "error"
+				errText = st.Error
+			}
+			if err := writePrintRequestStatus(m.bridgeStore, m.activePrintRequestEPC, status, errText); err != nil {
+				m.info = "print request status xato: " + err.Error()
+			}
+			m.activePrintRequestEPC = ""
 		}
 		if st.Action != "" {
 			m.info = zebraActionSummary(st)
@@ -201,7 +194,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case clockMsg:
 		m.now = time.Time(msg)
-		return m, clockTickCmd()
+		cmd := clockTickCmd()
+		if reqCmd := m.syncPendingPrintRequest(m.now); reqCmd != nil {
+			cmd = tea.Batch(cmd, reqCmd)
+		}
+		return m, cmd
 	default:
 		return m, nil
 	}
