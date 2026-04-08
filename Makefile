@@ -7,7 +7,7 @@ POLYGON_HTTP_ADDR ?= 127.0.0.1:18000
 APP_USER ?= $(shell id -un)
 APP_GROUP ?= $(shell id -gn)
 
-.PHONY: help check-env build build-bot build-scale build-zebra build-polygon run run-scale run-bot run-polygon run-test test test-polygon clean release release-all autostart-install autostart-status autostart-restart autostart-stop
+.PHONY: help check-env build build-bot build-scale build-zebra build-polygon build-mobileapi run run-scale run-bot run-polygon run-test run-mobileapi test test-polygon test-mobileapi clean release release-all autostart-install autostart-status autostart-restart autostart-stop
 
 help:
 	@echo "Targets:"
@@ -16,10 +16,13 @@ help:
 	@echo "  make run-bot    - faqat telegram bot"
 	@echo "  make run-polygon - real qurilmasiz polygon simulator"
 	@echo "  make run-test   - polygon + scale TUI (qurilmasiz core test)"
+	@echo "  make run-mobileapi - mobile API backend"
 	@echo "  make build      - bot + scale + zebra binary build (./bin)"
 	@echo "  make build-polygon - polygon binary build (./bin)"
+	@echo "  make build-mobileapi - mobile API binary build (./bin)"
 	@echo "  make test       - barcha modullarda test"
 	@echo "  make test-polygon - polygon modul testlari"
+	@echo "  make test-mobileapi - mobile API testlari"
 	@echo "  make autostart-install - systemd service'larni o'rnatadi va start qiladi"
 	@echo "  make autostart-status  - service holatini ko'rsatadi"
 	@echo "  make autostart-restart - service'larni restart qiladi"
@@ -52,6 +55,10 @@ build-polygon:
 	@mkdir -p bin
 	go build -o ./bin/polygon ./polygon
 
+build-mobileapi:
+	@mkdir -p bin
+	go build -o ./bin/mobileapi ./cmd/mobileapi
+
 run: check-env
 	cd scale && go run . --no-bridge --device "$(SCALE_DEVICE)" --zebra-device "$(ZEBRA_DEVICE)" --bridge-state-file "$(BRIDGE_STATE_FILE)"
 
@@ -73,6 +80,9 @@ run-test:
 	sleep 1; \
 	cd scale && go run . --no-bot --no-zebra --bridge-url "http://$(POLYGON_HTTP_ADDR)/api/v1/scale" --bridge-state-file "$(BRIDGE_STATE_FILE)"
 
+run-mobileapi:
+	go run ./cmd/mobileapi
+
 test:
 	cd bot && go test ./...
 	cd bridge && go test ./...
@@ -81,6 +91,9 @@ test:
 
 test-polygon:
 	cd polygon && go test ./...
+
+test-mobileapi:
+	go test ./internal/mobileapi ./cmd/mobileapi
 
 clean:
 	@if [ -d ./bin ]; then find ./bin -type f -delete; find ./bin -type d -empty -delete; fi
