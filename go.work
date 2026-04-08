@@ -5,6 +5,7 @@ use (
 	./bot
 	./bridge
 	./core
+	./polygon
 	./scale
 	./zebra
 )

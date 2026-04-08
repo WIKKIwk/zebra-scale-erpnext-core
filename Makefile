@@ -3,18 +3,23 @@ SHELL := /bin/sh
 SCALE_DEVICE ?= /dev/ttyUSB0
 ZEBRA_DEVICE ?= /dev/usb/lp0
 BRIDGE_STATE_FILE ?= /tmp/gscale-zebra/bridge_state.json
+POLYGON_HTTP_ADDR ?= 127.0.0.1:18000
 APP_USER ?= $(shell id -un)
 APP_GROUP ?= $(shell id -gn)
 
-.PHONY: help check-env build build-bot build-scale build-zebra run run-scale run-bot test clean release release-all autostart-install autostart-status autostart-restart autostart-stop
+.PHONY: help check-env build build-bot build-scale build-zebra build-polygon run run-scale run-bot run-polygon run-test test test-polygon clean release release-all autostart-install autostart-status autostart-restart autostart-stop
 
 help:
 	@echo "Targets:"
 	@echo "  make run        - scale TUI ni ishga tushiradi (bot auto-start bilan)"
 	@echo "  make run-scale  - faqat scale TUI (bot auto-startsiz)"
 	@echo "  make run-bot    - faqat telegram bot"
+	@echo "  make run-polygon - real qurilmasiz polygon simulator"
+	@echo "  make run-test   - polygon + scale TUI (qurilmasiz core test)"
 	@echo "  make build      - bot + scale + zebra binary build (./bin)"
+	@echo "  make build-polygon - polygon binary build (./bin)"
 	@echo "  make test       - barcha modullarda test"
+	@echo "  make test-polygon - polygon modul testlari"
 	@echo "  make autostart-install - systemd service'larni o'rnatadi va start qiladi"
 	@echo "  make autostart-status  - service holatini ko'rsatadi"
 	@echo "  make autostart-restart - service'larni restart qiladi"
@@ -43,6 +48,10 @@ build-zebra:
 	@mkdir -p bin
 	go build -o ./bin/zebra ./zebra
 
+build-polygon:
+	@mkdir -p bin
+	go build -o ./bin/polygon ./polygon
+
 run: check-env
 	cd scale && go run . --no-bridge --device "$(SCALE_DEVICE)" --zebra-device "$(ZEBRA_DEVICE)" --bridge-state-file "$(BRIDGE_STATE_FILE)"
 
@@ -52,11 +61,26 @@ run-scale:
 run-bot: check-env
 	cd bot && go run ./cmd/bot
 
+run-polygon:
+	cd polygon && go run .
+
+run-test:
+	@mkdir -p /tmp/gscale-zebra
+	@POLY_PID=""; \
+	trap 'if [ -n "$$POLY_PID" ]; then kill $$POLY_PID 2>/dev/null || true; fi' EXIT INT TERM; \
+	(cd polygon && go run . --http-addr "$(POLYGON_HTTP_ADDR)" --bridge-state-file "$(BRIDGE_STATE_FILE)" >/tmp/gscale-zebra/polygon.log 2>&1) & \
+	POLY_PID=$$!; \
+	sleep 1; \
+	cd scale && go run . --no-bot --no-zebra --bridge-url "http://$(POLYGON_HTTP_ADDR)/api/v1/scale" --bridge-state-file "$(BRIDGE_STATE_FILE)"
+
 test:
 	cd bot && go test ./...
 	cd bridge && go test ./...
 	cd scale && go test ./...
 	cd core && GOWORK=off go test ./...
+
+test-polygon:
+	cd polygon && go test ./...
 
 clean:
 	@if [ -d ./bin ]; then find ./bin -type f -delete; find ./bin -type d -empty -delete; fi
