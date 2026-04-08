@@ -15,6 +15,13 @@ Ishga tushirish:
 make run-polygon
 ```
 
+Yoki modul ichidan:
+
+```bash
+cd polygon
+make run
+```
+
 Asosiy endpointlar:
 - `GET /health`
 - `GET /api/v1/scale`
