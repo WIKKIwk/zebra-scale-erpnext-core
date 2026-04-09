@@ -7,14 +7,19 @@ import (
 
 const (
 	defaultListenAddr      = ":8081"
+	defaultDiscoveryAddr   = ":18081"
 	defaultBridgeStateFile = "/tmp/gscale-zebra/bridge_state.json"
+	defaultProfileFile     = "/tmp/gscale-zebra/mobile_profile.json"
 	defaultPolygonURL      = "http://127.0.0.1:18000"
 )
 
 type Config struct {
 	ListenAddr      string
+	DiscoveryAddr   string
 	BridgeStateFile string
+	ProfileFile     string
 	PolygonURL      string
+	ServerName      string
 	LoginPhone      string
 	LoginCode       string
 	Profile         SessionProfile
@@ -34,11 +39,18 @@ func LoadConfig() Config {
 	legalName := firstNonEmpty(os.Getenv("MOBILE_API_LEGAL_NAME"), displayName)
 	ref := firstNonEmpty(os.Getenv("MOBILE_API_REF"), "dev-operator")
 	avatarURL := strings.TrimSpace(os.Getenv("MOBILE_API_AVATAR_URL"))
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = ""
+	}
 
 	return Config{
 		ListenAddr:      firstNonEmpty(os.Getenv("MOBILE_API_ADDR"), defaultListenAddr),
+		DiscoveryAddr:   firstNonEmpty(os.Getenv("MOBILE_API_DISCOVERY_ADDR"), defaultDiscoveryAddr),
 		BridgeStateFile: firstNonEmpty(os.Getenv("BRIDGE_STATE_FILE"), defaultBridgeStateFile),
+		ProfileFile:     firstNonEmpty(os.Getenv("MOBILE_API_PROFILE_FILE"), defaultProfileFile),
 		PolygonURL:      firstNonEmpty(os.Getenv("POLYGON_URL"), defaultPolygonURL),
+		ServerName:      firstNonEmpty(os.Getenv("MOBILE_API_SERVER_NAME"), hostname, "gscale-zebra"),
 		LoginPhone:      phone,
 		LoginCode:       firstNonEmpty(os.Getenv("MOBILE_API_CODE"), "1234"),
 		Profile: SessionProfile{

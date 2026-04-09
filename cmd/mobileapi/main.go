@@ -32,6 +32,12 @@ func main() {
 		}
 	}()
 
+	go func() {
+		if err := srv.ListenAndServeDiscovery(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("mobile API discovery warning: %v", err)
+		}
+	}()
+
 	<-ctx.Done()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

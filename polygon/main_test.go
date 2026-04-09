@@ -101,3 +101,43 @@ func TestTickCompletesPendingPrintRequest(t *testing.T) {
 		t.Fatalf("printer preview missing EPC write command: %s", sim.printerHistory[0].Preview)
 	}
 }
+
+func TestDefaultCycleHasBurstAndPausePattern(t *testing.T) {
+	t.Parallel()
+
+	sim := newSimulator(config{
+		bridgeStateFile: t.TempDir() + "/bridge_state.json",
+		auto:            true,
+		printMode:       "success",
+		printDelay:      time.Second,
+	})
+
+	if len(sim.cycle) < 12 {
+		t.Fatalf("cycle len = %d, want richer burst pattern", len(sim.cycle))
+	}
+
+	hasFastBurst := false
+	hasStablePause := false
+	hasZeroPause := false
+	for _, frame := range sim.cycle {
+		if !frame.stable && frame.weight > 0 && frame.duration <= 250*time.Millisecond {
+			hasFastBurst = true
+		}
+		if frame.stable && frame.duration >= 1500*time.Millisecond {
+			hasStablePause = true
+		}
+		if frame.weight == 0 && frame.duration >= 900*time.Millisecond {
+			hasZeroPause = true
+		}
+	}
+
+	if !hasFastBurst {
+		t.Fatal("cycle should have fast moving burst frames")
+	}
+	if !hasStablePause {
+		t.Fatal("cycle should have stable pause frames")
+	}
+	if !hasZeroPause {
+		t.Fatal("cycle should have zero-weight pause frames")
+	}
+}

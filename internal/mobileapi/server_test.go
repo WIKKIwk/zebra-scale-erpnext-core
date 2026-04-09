@@ -2,6 +2,7 @@ package mobileapi
 
 import (
 	bridgestate "bridge/state"
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -14,6 +15,7 @@ func TestLoginAndProfile(t *testing.T) {
 	t.Parallel()
 
 	server := New(Config{
+		ServerName:      "gscale-dev",
 		BridgeStateFile: t.TempDir() + "/bridge_state.json",
 		LoginPhone:      "998900000000",
 		LoginCode:       "1234",
@@ -58,6 +60,36 @@ func TestLoginAndProfile(t *testing.T) {
 	}
 }
 
+func TestHandshakeReturnsServerIdentity(t *testing.T) {
+	t.Parallel()
+
+	server := New(Config{
+		ServerName:      "gscale-dev",
+		BridgeStateFile: t.TempDir() + "/bridge_state.json",
+		Profile: SessionProfile{
+			Role:        "admin",
+			DisplayName: "Polygon Operator",
+			LegalName:   "Polygon Operator",
+			Ref:         "dev-operator",
+			Phone:       "998900000000",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mobile/handshake", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("handshake status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"server_name":"gscale-dev"`)) {
+		t.Fatalf("handshake body = %s", rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"app":"gscale-zebra"`)) {
+		t.Fatalf("handshake body = %s", rec.Body.String())
+	}
+}
+
 func TestMonitorStateReturnsBridgeSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -79,6 +111,7 @@ func TestMonitorStateReturnsBridgeSnapshot(t *testing.T) {
 	}
 
 	server := New(Config{
+		ServerName:      "gscale-dev",
 		BridgeStateFile: stateFile,
 		LoginPhone:      "998900000000",
 		LoginCode:       "1234",
@@ -112,4 +145,69 @@ func TestMonitorStateReturnsBridgeSnapshot(t *testing.T) {
 	if !bytes.Contains(rec.Body.Bytes(), []byte(`"source":"polygon"`)) {
 		t.Fatalf("monitor body = %s", rec.Body.String())
 	}
+}
+
+func TestMonitorStreamReturnsInitialSnapshotEvent(t *testing.T) {
+	t.Parallel()
+
+	stateFile := t.TempDir() + "/bridge_state.json"
+	store := bridgestate.New(stateFile)
+	weight := 2.5
+	stable := true
+	if err := store.Update(func(snapshot *bridgestate.Snapshot) {
+		snapshot.Scale = bridgestate.ScaleSnapshot{
+			Source: "polygon",
+			Weight: &weight,
+			Unit:   "kg",
+			Stable: &stable,
+		}
+	}); err != nil {
+		t.Fatalf("seed bridge: %v", err)
+	}
+
+	server := New(Config{
+		ServerName:      "gscale-dev",
+		BridgeStateFile: stateFile,
+		Profile: SessionProfile{
+			Role:        "admin",
+			DisplayName: "Polygon Operator",
+			LegalName:   "Polygon Operator",
+			Ref:         "dev-operator",
+			Phone:       "998900000000",
+		},
+	})
+
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	resp, err := ts.Client().Get(ts.URL + "/v1/mobile/monitor/stream")
+	if err != nil {
+		t.Fatalf("stream request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("content-type = %q", got)
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	foundEvent := false
+	foundScale := false
+	for i := 0; i < 8; i++ {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read stream: %v", err)
+		}
+		if bytes.Contains([]byte(line), []byte("event: snapshot")) {
+			foundEvent = true
+		}
+		if bytes.Contains([]byte(line), []byte(`"weight":2.5`)) {
+			foundScale = true
+		}
+		if foundEvent && foundScale {
+			return
+		}
+	}
+
+	t.Fatalf("stream did not include initial snapshot event")
 }

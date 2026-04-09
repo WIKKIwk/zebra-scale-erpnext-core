@@ -1,4 +1,4 @@
-[main] 2026/02/23 08:11:17.880633 scale started
-[main] 2026/02/23 08:11:17.880670 workflow logs dir: /home/wikki/local.git/gscale-zebra/logs/scale
-[main] 2026/02/23 08:11:17.881131 serial reader started: device=/dev/ttyUSB0 baud=9600
-[main] 2026/02/23 08:11:17.881768 zebra monitor started: device=/dev/usb/lp0 interval=900ms
+[main] 2026/04/09 11:00:10.918928 scale started
+[main] 2026/04/09 11:00:10.918969 workflow logs dir: /home/wikki/storage/local.git/gscale-zebra/logs/scale
+[main] 2026/04/09 11:00:10.919128 serial reader started: device=/dev/ttyUSB0 baud=9600
+[main] 2026/04/09 11:00:10.919178 zebra monitor started: device=/dev/usb/lp0 interval=900ms

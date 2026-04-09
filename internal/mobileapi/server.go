@@ -49,10 +49,12 @@ func New(cfg Config) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
+	mux.HandleFunc("/v1/mobile/handshake", s.handleHandshake)
 	mux.HandleFunc("/v1/mobile/auth/login", s.handleLogin)
 	mux.HandleFunc("/v1/mobile/auth/logout", s.handleLogout)
 	mux.HandleFunc("/v1/mobile/profile", s.handleProfile)
 	mux.HandleFunc("/v1/mobile/monitor/state", s.handleMonitorState)
+	mux.HandleFunc("/v1/mobile/monitor/stream", s.handleMonitorStream)
 	return mux
 }
 
@@ -64,6 +66,27 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"service": "mobileapi",
+	})
+}
+
+func (s *Server) handleHandshake(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":            true,
+		"service":       "mobileapi",
+		"app":           "gscale-zebra",
+		"server_name":   s.cfg.ServerName,
+		"server_ref":    s.currentProfile().Ref,
+		"display_name":  s.currentProfile().DisplayName,
+		"role":          s.currentProfile().Role,
+		"phone":         s.currentProfile().Phone,
+		"monitor_path":  "/v1/mobile/monitor/state",
+		"profile_path":  "/v1/mobile/profile",
+		"requires_auth": false,
 	})
 }
 
@@ -102,7 +125,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":   token,
-		"profile": s.cfg.Profile,
+		"profile": s.currentProfile(),
 	})
 }
 
@@ -128,10 +151,10 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profile, ok := s.authorize(r)
-	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
-		return
+	profile := s.currentProfile()
+	authProfile, ok := s.authorize(r)
+	if ok {
+		profile = authProfile
 	}
 
 	if r.Method == http.MethodPut {
@@ -139,6 +162,13 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
 			if nickname := strings.TrimSpace(asString(payload["nickname"])); nickname != "" {
 				profile.DisplayName = nickname
+				profile.LegalName = nickname
+				if err := s.saveCurrentProfile(profile); err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]any{
+						"error": err.Error(),
+					})
+					return
+				}
 				s.updateAuthorizedProfile(r, profile)
 			}
 		}
@@ -153,10 +183,83 @@ func (s *Server) handleMonitorState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profile, ok := s.authorize(r)
-	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+	payload, err := s.readMonitorPayload(r)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": err.Error(),
+		})
 		return
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+func (s *Server) handleMonitorStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": "stream_unsupported",
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	writeSSEComment(w, "connected")
+	flusher.Flush()
+
+	ticker := time.NewTicker(350 * time.Millisecond)
+	defer ticker.Stop()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	lastPayload := []byte(nil)
+	for {
+		payload, err := s.readMonitorPayload(r)
+		if err != nil {
+			writeSSEEvent(w, "error", map[string]any{"error": err.Error()})
+			flusher.Flush()
+			return
+		}
+
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			writeSSEEvent(w, "error", map[string]any{"error": err.Error()})
+			flusher.Flush()
+			return
+		}
+		if string(encoded) != string(lastPayload) {
+			lastPayload = encoded
+			if _, err := fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", encoded); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+		case <-heartbeat.C:
+			writeSSEComment(w, "ping")
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *Server) readMonitorPayload(r *http.Request) (map[string]any, error) {
+	profile := s.currentProfile()
+	authProfile, ok := s.authorize(r)
+	if ok {
+		profile = authProfile
 	}
 
 	snap, err := s.store.Read()
@@ -164,10 +267,7 @@ func (s *Server) handleMonitorState(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, io.EOF) {
 			snap = bridgestate.Snapshot{}
 		} else {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"error": err.Error(),
-			})
-			return
+			return nil, err
 		}
 	}
 
@@ -178,12 +278,12 @@ func (s *Server) handleMonitorState(w http.ResponseWriter, r *http.Request) {
 		printer = value
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return map[string]any{
 		"ok":      true,
 		"profile": profile,
 		"state":   snap,
 		"printer": printer,
-	})
+	}, nil
 }
 
 func (s *Server) fetchPrinterTrace() (map[string]any, error) {
@@ -271,4 +371,16 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeSSEEvent(w http.ResponseWriter, event string, payload any) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", strings.TrimSpace(event), encoded)
+}
+
+func writeSSEComment(w http.ResponseWriter, comment string) {
+	_, _ = fmt.Fprintf(w, ": %s\n\n", strings.TrimSpace(comment))
 }
