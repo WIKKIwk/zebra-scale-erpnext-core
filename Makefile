@@ -10,6 +10,7 @@ APP_USER ?= $(shell id -un)
 APP_GROUP ?= $(shell id -gn)
 MOBILE_API_ADDR ?= 0.0.0.0:8081
 MOBILE_API_SERVER_NAME ?= $(shell hostname)
+ERP_READ_URL ?= http://127.0.0.1:8090
 CURL ?= curl
 POLYGON_DEV_BIN ?= /tmp/gscale-zebra/polygon-dev
 MOBILEAPI_DEV_BIN ?= /tmp/gscale-zebra/mobileapi-dev
@@ -146,7 +147,7 @@ run-dev: fresh-bridge-state
 		sed -n '1,160p' /tmp/gscale-zebra/polygon.log; \
 		exit 1; \
 	fi; \
-	env MOBILE_API_ADDR="$(MOBILE_API_ADDR)" MOBILE_API_SERVER_NAME="$(MOBILE_API_SERVER_NAME)" BRIDGE_STATE_FILE="$(BRIDGE_STATE_FILE)" POLYGON_URL="http://$(POLYGON_HTTP_ADDR)" "$(MOBILEAPI_DEV_BIN)" >/tmp/gscale-zebra/mobileapi.log 2>&1 & \
+	env MOBILE_API_ADDR="$(MOBILE_API_ADDR)" MOBILE_API_SERVER_NAME="$(MOBILE_API_SERVER_NAME)" BRIDGE_STATE_FILE="$(BRIDGE_STATE_FILE)" POLYGON_URL="http://$(POLYGON_HTTP_ADDR)" ERP_READ_URL="$(ERP_READ_URL)" "$(MOBILEAPI_DEV_BIN)" >/tmp/gscale-zebra/mobileapi.log 2>&1 & \
 	MOBILEAPI_PID=$$!; \
 	echo "$$MOBILEAPI_PID" >/tmp/gscale-zebra/mobileapi.pid; \
 	for i in $$(seq 1 40); do \
@@ -160,8 +161,8 @@ run-dev: fresh-bridge-state
 			sed -n '1,160p' /tmp/gscale-zebra/mobileapi.log; \
 			exit 1; \
 		fi; \
-		: > "$(SCALE_DEV_LAUNCH_LOG)"; \
-		script -q -c 'cd "$(CURDIR)/scale" && exec go run . --no-bot --no-zebra --bridge-url "http://$(POLYGON_HTTP_ADDR)/api/v1/scale" --bridge-state-file "$(BRIDGE_STATE_FILE)"' "$(SCALE_DEV_LAUNCH_LOG)" >/dev/null 2>&1 & \
+		rm -f "$(SCALE_DEV_LAUNCH_LOG)"; \
+		script -q "$(SCALE_DEV_LAUNCH_LOG)" zsh -lc 'cd "$(CURDIR)/scale" && exec go run . --no-bot --no-zebra --bridge-url "http://$(POLYGON_HTTP_ADDR)/api/v1/scale" --bridge-state-file "$(BRIDGE_STATE_FILE)"' >/dev/null 2>&1 & \
 		SCALE_PID=$$!; \
 		echo "$$SCALE_PID" >/tmp/gscale-zebra/scale.pid; \
 		sleep 2; \
