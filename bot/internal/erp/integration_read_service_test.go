@@ -22,12 +22,15 @@ func TestReadServiceIntegration(t *testing.T) {
 		t.Fatalf("empty read service identity")
 	}
 
-	items, err := c.SearchItems(context.Background(), "zaxro", 3)
+	items, err := c.SearchItems(context.Background(), "", 50)
 	if err != nil {
 		t.Fatalf("SearchItems error: %v", err)
 	}
-	if len(items) == 0 {
-		t.Fatalf("expected non-empty items")
+	if len(items) != 1 {
+		t.Fatalf("expected exactly 1 stock-linked item, got %d", len(items))
+	}
+	if items[0].ItemCode != "Afsona" {
+		t.Fatalf("unexpected stock-linked item: %+v", items[0])
 	}
 
 	if _, err := c.SearchItemWarehouses(context.Background(), items[0].ItemCode, "", 3); err != nil {
