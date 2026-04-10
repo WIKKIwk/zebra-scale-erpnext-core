@@ -162,12 +162,9 @@ run-dev: fresh-bridge-state
 		printf '[run-dev] 1/3 simulator ready: http://%s\n' "$(POLYGON_HTTP_ADDR)"; \
 		printf '[run-dev] 2/3 mobileapi ready: http://127.0.0.1:8081\n'; \
 		printf '[run-dev] 3/3 core ready:      scale running in background\n'; \
-		printf '[run-dev] live logs: polygon, scale bridge, scale print_request, fake zebra, bot batch\n'; \
+		printf '[run-dev] live logs: scale print_request + polygon fake zebra\n'; \
 		start_tail /tmp/gscale-zebra/polygon.log polygon; \
-		start_tail "$(CURDIR)/logs/scale/worker.bridge.log" scale.bridge; \
 		start_tail "$(CURDIR)/logs/scale/worker.print_request.log" scale.print_request; \
-		start_tail "$(CURDIR)/logs/scale/worker.zebra_action.log" scale.zebra; \
-		start_tail "$(CURDIR)/logs/bot/worker.batch.log" bot.batch; \
 		while :; do sleep 1; done
 
 stop-dev-services:
