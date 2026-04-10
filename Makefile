@@ -178,7 +178,6 @@ stop-dev-services:
 stop-bot-services:
 	@pkill -f '[g]o run ./cmd/bot' 2>/dev/null || true
 	@pkill -f '/go-build/.*/[b]ot' 2>/dev/null || true
-	@pkill -f '[m]ake run-bot' 2>/dev/null || true
 	@pkill -x bot 2>/dev/null || true
 
 run-mobileapi:
