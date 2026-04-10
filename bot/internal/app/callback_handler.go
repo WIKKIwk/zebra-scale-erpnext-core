@@ -34,28 +34,7 @@ func (a *App) handleCallbackQuery(ctx context.Context, q telegram.CallbackQuery)
 }
 
 func (a *App) handleMaterialReceiptCallback(ctx context.Context, q telegram.CallbackQuery) error {
-	if q.Message == nil || q.Message.Chat.ID == 0 {
-		return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch boshlandi")
-	}
-
-	chatID := q.Message.Chat.ID
-	sel, ok := a.getSelection(chatID)
-	if !ok {
-		if err := a.tg.AnswerCallbackQuery(ctx, q.ID, "Avval item va ombor tanlang"); err != nil {
-			return err
-		}
-		return a.tg.SendMessage(ctx, chatID, "Avval /batch orqali item va ombor tanlang.")
-	}
-	if a.hasBatchSession(chatID) {
-		return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch allaqachon ishlayapti")
-	}
-	if _, ok := a.otherActiveBatchOwner(chatID); ok {
-		return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch boshqa chatda ishlayapti")
-	}
-
-	a.clearBatchChangePending(chatID)
-	_ = a.startMaterialReceiptBatch(ctx, chatID, sel, q.Message.MessageID, "Scale qty kutilmoqda...")
-	return a.tg.AnswerCallbackQuery(ctx, q.ID, "Batch boshlandi")
+	return a.tg.AnswerCallbackQuery(ctx, q.ID, "Material Receipt batchni boshlamaydi. Batch Start ni bosing.")
 }
 
 func (a *App) handleBatchChangeItemCallback(ctx context.Context, q telegram.CallbackQuery) error {
