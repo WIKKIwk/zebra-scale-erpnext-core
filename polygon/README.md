@@ -9,6 +9,7 @@ Nimalarni beradi:
 - pending `print_request` ni `processing -> done/error` ga o'tkazish;
 - virtual printerga kelgan buyruq preview va tarixini saqlash;
 - HTTP endpointlar orqali state va qo'lda boshqaruv.
+- `scenario` orqali `batch-flow`, `idle`, `stress`, `calibration` profillarini tanlash.
 
 Ishga tushirish:
 
@@ -29,6 +30,7 @@ Asosiy endpointlar:
 - `GET /api/v1/state`
 - `GET /api/v1/dev/printer`
 - `POST /api/v1/dev/auto`
+- `GET|POST /api/v1/dev/scenario`
 - `POST /api/v1/dev/weight`
 - `POST /api/v1/dev/reset`
 - `POST /api/v1/dev/print-mode`
@@ -40,4 +42,5 @@ curl http://127.0.0.1:18000/api/v1/scale
 curl http://127.0.0.1:18000/api/v1/dev/printer
 curl -X POST http://127.0.0.1:18000/api/v1/dev/weight -d '{"weight":1.25,"stable":true,"unit":"kg"}'
 curl -X POST http://127.0.0.1:18000/api/v1/dev/print-mode -d '{"mode":"alternate"}'
+curl -X POST http://127.0.0.1:18000/api/v1/dev/scenario -d '{"scenario":"stress","seed":7}'
 ```

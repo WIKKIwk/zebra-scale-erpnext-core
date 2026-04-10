@@ -2,6 +2,8 @@ package main
 
 import (
 	bridgestate "bridge/state"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,8 @@ func TestBootstrapWritesInitialSnapshot(t *testing.T) {
 		bridgeStateFile: stateFile,
 		auto:            true,
 		printMode:       "success",
+		scenario:        "batch-flow",
+		seed:            42,
 		printDelay:      time.Second,
 	})
 
@@ -35,6 +39,56 @@ func TestBootstrapWritesInitialSnapshot(t *testing.T) {
 	}
 	if snap.Zebra.DevicePath != "polygon://zebra" {
 		t.Fatalf("zebra device = %q", snap.Zebra.DevicePath)
+	}
+}
+
+func TestIdleScenarioStaysNearZero(t *testing.T) {
+	t.Parallel()
+
+	cycle := buildScenarioCycle("idle", 42)
+	if len(cycle) == 0 {
+		t.Fatal("idle cycle is empty")
+	}
+	for _, frame := range cycle {
+		if !frame.stable {
+			t.Fatal("idle scenario should stay stable")
+		}
+		if frame.weight > 0.010 {
+			t.Fatalf("idle weight too high: %.3f", frame.weight)
+		}
+	}
+}
+
+func TestScenarioEndpointSwitchesProfiles(t *testing.T) {
+	t.Parallel()
+
+	sim := newSimulator(config{
+		bridgeStateFile: t.TempDir() + "/bridge_state.json",
+		auto:            true,
+		printMode:       "success",
+		scenario:        "batch-flow",
+		seed:            42,
+		printDelay:      time.Second,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/dev/scenario", strings.NewReader(`{"scenario":"stress","seed":7,"auto":false}`))
+	rec := httptest.NewRecorder()
+	sim.handleScenario(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if sim.scenario != "stress" {
+		t.Fatalf("scenario = %q", sim.scenario)
+	}
+	if sim.seed != 7 {
+		t.Fatalf("seed = %d", sim.seed)
+	}
+	if len(sim.cycle) == 0 {
+		t.Fatal("stress cycle is empty")
+	}
+	if sim.auto {
+		t.Fatal("scenario switch should preserve auto=false from payload")
 	}
 }
 

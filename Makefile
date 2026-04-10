@@ -4,6 +4,8 @@ SCALE_DEVICE ?= /dev/ttyUSB0
 ZEBRA_DEVICE ?= /dev/usb/lp0
 BRIDGE_STATE_FILE ?= /tmp/gscale-zebra/bridge_state.json
 POLYGON_HTTP_ADDR ?= 127.0.0.1:18000
+POLYGON_SCENARIO ?= batch-flow
+POLYGON_SEED ?= 42
 APP_USER ?= $(shell id -un)
 APP_GROUP ?= $(shell id -gn)
 MOBILE_API_ADDR ?= 0.0.0.0:8081
@@ -41,6 +43,7 @@ help:
 	@echo ""
 	@echo "Override:"
 	@echo "  make run SCALE_DEVICE=/dev/ttyUSB1 ZEBRA_DEVICE=/dev/usb/lp0"
+	@echo "  make run-polygon SCENARIO=stress"
 
 check-env:
 	@test -f bot/.env || (echo "xato: bot/.env topilmadi (bot/.env.example dan nusxa oling)"; exit 1)
@@ -77,13 +80,13 @@ run-bot: check-env
 	cd bot && go run ./cmd/bot
 
 run-polygon:
-	cd polygon && go run .
+	$(MAKE) -C polygon run
 
 run-test:
 	@mkdir -p /tmp/gscale-zebra
 	@POLY_PID=""; \
 	trap 'if [ -n "$$POLY_PID" ]; then kill $$POLY_PID 2>/dev/null || true; fi' EXIT INT TERM; \
-	(cd polygon && go run . --http-addr "$(POLYGON_HTTP_ADDR)" --bridge-state-file "$(BRIDGE_STATE_FILE)" >/tmp/gscale-zebra/polygon.log 2>&1) & \
+	(cd polygon && go run . --http-addr "$(POLYGON_HTTP_ADDR)" --bridge-state-file "$(BRIDGE_STATE_FILE)" --scenario "$(POLYGON_SCENARIO)" --seed "$(POLYGON_SEED)" >/tmp/gscale-zebra/polygon.log 2>&1) & \
 	POLY_PID=$$!; \
 	sleep 1; \
 	cd scale && go run . --no-bot --no-zebra --bridge-url "http://$(POLYGON_HTTP_ADDR)/api/v1/scale" --bridge-state-file "$(BRIDGE_STATE_FILE)"
@@ -107,7 +110,7 @@ run-dev:
 		rm -f /tmp/gscale-zebra/mobileapi.pid /tmp/gscale-zebra/polygon.pid /tmp/gscale-zebra/scale.pid; \
 	}; \
 	trap 'cleanup' EXIT INT TERM; \
-	"$(POLYGON_DEV_BIN)" --http-addr "$(POLYGON_HTTP_ADDR)" --bridge-state-file "$(BRIDGE_STATE_FILE)" >/tmp/gscale-zebra/polygon.log 2>&1 & \
+	"$(POLYGON_DEV_BIN)" --http-addr "$(POLYGON_HTTP_ADDR)" --bridge-state-file "$(BRIDGE_STATE_FILE)" --scenario "$(POLYGON_SCENARIO)" --seed "$(POLYGON_SEED)" >/tmp/gscale-zebra/polygon.log 2>&1 & \
 	POLY_PID=$$!; \
 	echo "$$POLY_PID" >/tmp/gscale-zebra/polygon.pid; \
 	for i in $$(seq 1 40); do \

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,6 +29,8 @@ type config struct {
 	printDelay      time.Duration
 	auto            bool
 	printMode       string
+	scenario        string
+	seed            int64
 }
 
 type scaleAPIResponse struct {
@@ -46,6 +49,12 @@ type controlPayload struct {
 	Stable  *bool    `json:"stable"`
 	Unit    string   `json:"unit"`
 	Mode    string   `json:"mode"`
+}
+
+type scenarioPayload struct {
+	Scenario string `json:"scenario"`
+	Seed     *int64 `json:"seed"`
+	Auto     *bool  `json:"auto"`
 }
 
 type cycleFrame struct {
@@ -72,6 +81,8 @@ type simulator struct {
 	store      *bridgestate.Store
 	auto       bool
 	printMode  string
+	scenario   string
+	seed       int64
 	printDelay time.Duration
 
 	scaleScale  bridgestate.ScaleSnapshot
@@ -132,9 +143,12 @@ func parseFlags() config {
 	flag.DurationVar(&cfg.printDelay, "print-delay", 1100*time.Millisecond, "fake print completion delay")
 	flag.BoolVar(&cfg.auto, "auto", true, "enable automatic fake scale cycles")
 	flag.StringVar(&cfg.printMode, "print-mode", "success", "fake print mode: success|fail|alternate")
+	flag.StringVar(&cfg.scenario, "scenario", "batch-flow", "fake scale scenario: batch-flow|idle|stress|calibration")
+	flag.Int64Var(&cfg.seed, "seed", 42, "seed for deterministic scenario generation")
 	flag.Parse()
 
 	cfg.printMode = normalizePrintMode(cfg.printMode)
+	cfg.scenario = normalizeScenario(cfg.scenario)
 	if cfg.tick <= 0 {
 		cfg.tick = 250 * time.Millisecond
 	}
@@ -145,10 +159,16 @@ func parseFlags() config {
 }
 
 func newSimulator(cfg config) *simulator {
+	cycle := buildScenarioCycle(cfg.scenario, cfg.seed)
+	if len(cycle) == 0 {
+		cycle = buildScenarioCycle("batch-flow", 42)
+	}
 	return &simulator{
 		store:      bridgestate.New(strings.TrimSpace(cfg.bridgeStateFile)),
 		auto:       cfg.auto,
 		printMode:  normalizePrintMode(cfg.printMode),
+		scenario:   normalizeScenario(cfg.scenario),
+		seed:       cfg.seed,
 		printDelay: cfg.printDelay,
 		scaleScale: bridgestate.ScaleSnapshot{
 			Source: "polygon",
@@ -163,41 +183,181 @@ func newSimulator(cfg config) *simulator {
 			MediaState:  "ok",
 			Verify:      "-",
 		},
-		cycle: []cycleFrame{
-			{weight: 0, stable: false, duration: 450 * time.Millisecond},
-			{weight: 0.124, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0.287, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0.418, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0.566, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0.711, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0.742, stable: true, duration: 1800 * time.Millisecond},
-			{weight: 0.741, stable: true, duration: 900 * time.Millisecond},
-			{weight: 0.523, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0.188, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0, stable: false, duration: 900 * time.Millisecond},
-			{weight: 0, stable: false, duration: 500 * time.Millisecond},
-			{weight: 0.352, stable: false, duration: 180 * time.Millisecond},
-			{weight: 0.816, stable: false, duration: 180 * time.Millisecond},
-			{weight: 1.041, stable: false, duration: 180 * time.Millisecond},
-			{weight: 1.119, stable: false, duration: 180 * time.Millisecond},
-			{weight: 1.126, stable: true, duration: 2200 * time.Millisecond},
-			{weight: 1.127, stable: true, duration: 1200 * time.Millisecond},
-			{weight: 0.842, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0.391, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0.109, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0, stable: false, duration: 1300 * time.Millisecond},
-			{weight: 0, stable: false, duration: 700 * time.Millisecond},
-			{weight: 0.214, stable: false, duration: 180 * time.Millisecond},
-			{weight: 0.512, stable: false, duration: 180 * time.Millisecond},
-			{weight: 0.934, stable: false, duration: 180 * time.Millisecond},
-			{weight: 1.284, stable: false, duration: 180 * time.Millisecond},
-			{weight: 1.308, stable: true, duration: 1600 * time.Millisecond},
-			{weight: 1.309, stable: true, duration: 1000 * time.Millisecond},
-			{weight: 1.021, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0.477, stable: false, duration: 220 * time.Millisecond},
-			{weight: 0, stable: false, duration: 1500 * time.Millisecond},
-		},
+		cycle: cycle,
 	}
+}
+
+func normalizeScenario(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "idle", "quiet":
+		return "idle"
+	case "stress", "noisy", "chaos":
+		return "stress"
+	case "calibration", "calibrate":
+		return "calibration"
+	case "demo", "batch", "batch-flow", "":
+		return "batch-flow"
+	default:
+		return "batch-flow"
+	}
+}
+
+func buildScenarioCycle(name string, seed int64) []cycleFrame {
+	rng := rand.New(rand.NewSource(seed))
+	switch normalizeScenario(name) {
+	case "idle":
+		return buildIdleCycle(rng)
+	case "stress":
+		return buildStressCycle(rng)
+	case "calibration":
+		return buildCalibrationCycle(rng)
+	default:
+		return buildBatchFlowCycle(rng)
+	}
+}
+
+func buildIdleCycle(rng *rand.Rand) []cycleFrame {
+	frames := make([]cycleFrame, 0, 24)
+	for i := 0; i < 24; i++ {
+		frames = append(frames, cycleFrame{
+			weight:   roundWeight(jitterWeight(rng, 0, 0.004)),
+			stable:   true,
+			duration: randDuration(rng, 650*time.Millisecond, 1100*time.Millisecond),
+		})
+	}
+	return frames
+}
+
+func buildCalibrationCycle(rng *rand.Rand) []cycleFrame {
+	weights := []float64{0.500, 1.000, 2.000}
+	frames := make([]cycleFrame, 0, 48)
+	for _, target := range weights {
+		frames = append(frames,
+			cycleFrame{weight: 0, stable: true, duration: randDuration(rng, 700*time.Millisecond, 1200*time.Millisecond)},
+		)
+		frames = append(frames, appendRamp(rng, 0, target, 4, 170*time.Millisecond, 260*time.Millisecond, 0.004)...)
+		frames = append(frames,
+			cycleFrame{weight: roundWeight(jitterWeight(rng, target, 0.002)), stable: false, duration: randDuration(rng, 180*time.Millisecond, 240*time.Millisecond)},
+			cycleFrame{weight: roundWeight(jitterWeight(rng, target, 0.001)), stable: true, duration: randDuration(rng, 1500*time.Millisecond, 2500*time.Millisecond)},
+			cycleFrame{weight: roundWeight(jitterWeight(rng, target, 0.001)), stable: true, duration: randDuration(rng, 800*time.Millisecond, 1300*time.Millisecond)},
+		)
+		frames = append(frames, appendRamp(rng, target, 0, 4, 160*time.Millisecond, 260*time.Millisecond, 0.003)...)
+		frames = append(frames,
+			cycleFrame{weight: 0, stable: true, duration: randDuration(rng, 900*time.Millisecond, 1400*time.Millisecond)},
+		)
+	}
+	return frames
+}
+
+func buildStressCycle(rng *rand.Rand) []cycleFrame {
+	frames := make([]cycleFrame, 0, 96)
+	for i := 0; i < 8; i++ {
+		target := roundWeight(0.180 + rng.Float64()*2.800)
+		frames = append(frames,
+			cycleFrame{weight: roundWeight(jitterWeight(rng, 0, 0.010)), stable: true, duration: randDuration(rng, 150*time.Millisecond, 420*time.Millisecond)},
+		)
+		frames = append(frames, appendRamp(rng, 0, target, 6, 90*time.Millisecond, 180*time.Millisecond, 0.020)...)
+		frames = append(frames,
+			cycleFrame{weight: roundWeight(jitterWeight(rng, target, 0.035)), stable: false, duration: randDuration(rng, 70*time.Millisecond, 150*time.Millisecond)},
+			cycleFrame{weight: roundWeight(jitterWeight(rng, target, 0.020)), stable: false, duration: randDuration(rng, 90*time.Millisecond, 180*time.Millisecond)},
+			cycleFrame{weight: roundWeight(jitterWeight(rng, target, 0.008)), stable: true, duration: randDuration(rng, 350*time.Millisecond, 900*time.Millisecond)},
+		)
+		frames = append(frames, appendRamp(rng, target, 0, 5, 80*time.Millisecond, 160*time.Millisecond, 0.018)...)
+		frames = append(frames,
+			cycleFrame{weight: 0, stable: true, duration: randDuration(rng, 180*time.Millisecond, 700*time.Millisecond)},
+			cycleFrame{weight: roundWeight(jitterWeight(rng, 0, 0.006)), stable: true, duration: randDuration(rng, 180*time.Millisecond, 500*time.Millisecond)},
+		)
+	}
+	return frames
+}
+
+func buildBatchFlowCycle(rng *rand.Rand) []cycleFrame {
+	frames := make([]cycleFrame, 0, 128)
+	rounds := 6 + rng.Intn(3)
+	for i := 0; i < rounds; i++ {
+		target := roundWeight(0.360 + rng.Float64()*1.650 + float64(i%2)*0.075)
+		frames = append(frames,
+			cycleFrame{weight: roundWeight(jitterWeight(rng, 0, 0.003)), stable: true, duration: randDuration(rng, 800*time.Millisecond, 1500*time.Millisecond)},
+		)
+		frames = append(frames, appendRamp(rng, 0, target, 5, 120*time.Millisecond, 240*time.Millisecond, 0.008)...)
+		frames = append(frames,
+			cycleFrame{weight: roundWeight(jitterWeight(rng, target, 0.005)), stable: false, duration: randDuration(rng, 180*time.Millisecond, 300*time.Millisecond)},
+			cycleFrame{weight: roundWeight(jitterWeight(rng, target, 0.002)), stable: true, duration: randDuration(rng, 1200*time.Millisecond, 2200*time.Millisecond)},
+			cycleFrame{weight: roundWeight(jitterWeight(rng, target, 0.0015)), stable: true, duration: randDuration(rng, 700*time.Millisecond, 1200*time.Millisecond)},
+		)
+		frames = append(frames, appendRamp(rng, target, 0, 4, 120*time.Millisecond, 240*time.Millisecond, 0.006)...)
+		frames = append(frames,
+			cycleFrame{weight: 0, stable: true, duration: randDuration(rng, 900*time.Millisecond, 1800*time.Millisecond)},
+			cycleFrame{weight: roundWeight(jitterWeight(rng, 0, 0.002)), stable: true, duration: randDuration(rng, 500*time.Millisecond, 900*time.Millisecond)},
+		)
+	}
+	return frames
+}
+
+func appendRamp(rng *rand.Rand, from, to float64, steps int, minDur, maxDur time.Duration, jitter float64) []cycleFrame {
+	if steps <= 0 {
+		return nil
+	}
+	frames := make([]cycleFrame, 0, steps)
+	for i := 1; i <= steps; i++ {
+		p := float64(i) / float64(steps)
+		weight := lerp(from, to, easeOutCubic(p))
+		if jitter > 0 {
+			weight = jitterWeight(rng, weight, jitter)
+		}
+		frames = append(frames, cycleFrame{
+			weight:   roundWeight(weight),
+			stable:   false,
+			duration: randDuration(rng, minDur, maxDur),
+		})
+	}
+	return frames
+}
+
+func randDuration(rng *rand.Rand, min, max time.Duration) time.Duration {
+	if max < min {
+		min, max = max, min
+	}
+	if min <= 0 {
+		min = 1
+	}
+	if max <= min {
+		return min
+	}
+	return min + time.Duration(rng.Int63n(int64(max-min)+1))
+}
+
+func jitterWeight(rng *rand.Rand, base, amplitude float64) float64 {
+	if amplitude <= 0 {
+		return base
+	}
+	return base + ((rng.Float64()*2)-1)*amplitude
+}
+
+func easeOutCubic(p float64) float64 {
+	if p <= 0 {
+		return 0
+	}
+	if p >= 1 {
+		return 1
+	}
+	oneMinus := 1 - p
+	return 1 - oneMinus*oneMinus*oneMinus
+}
+
+func lerp(from, to, p float64) float64 {
+	return from + (to-from)*p
+}
+
+func roundWeight(v float64) float64 {
+	if v < 0 {
+		v = 0
+	}
+	rounded, err := strconv.ParseFloat(strconv.FormatFloat(v, 'f', 3, 64), 64)
+	if err != nil {
+		return v
+	}
+	return rounded
 }
 
 func (s *simulator) bootstrap(now time.Time) error {
@@ -260,11 +420,7 @@ func (s *simulator) applyCycleFrameLocked(now time.Time) {
 	s.scaleScale.Unit = "kg"
 	s.scaleScale.Source = "polygon"
 	s.scaleScale.Port = "polygon://scale"
-	if frame.weight == 0 {
-		s.scaleRaw = "0.000 kg"
-	} else {
-		s.scaleRaw = formatScaleRaw(frame.weight, frame.stable)
-	}
+	s.scaleRaw = formatScaleRaw(frame.weight, frame.stable)
 	s.scaleScale.Error = ""
 	s.nextCycleAt = now.Add(frame.duration)
 }
@@ -367,6 +523,7 @@ func (s *simulator) routes() http.Handler {
 	mux.HandleFunc("/api/v1/state", s.handleState)
 	mux.HandleFunc("/api/v1/dev/printer", s.handlePrinter)
 	mux.HandleFunc("/api/v1/dev/auto", s.handleAuto)
+	mux.HandleFunc("/api/v1/dev/scenario", s.handleScenario)
 	mux.HandleFunc("/api/v1/dev/weight", s.handleWeight)
 	mux.HandleFunc("/api/v1/dev/reset", s.handleReset)
 	mux.HandleFunc("/api/v1/dev/print-mode", s.handlePrintMode)
@@ -473,6 +630,64 @@ func (s *simulator) handleAuto(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "auto": *payload.Enabled})
 }
 
+func (s *simulator) handleScenario(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.Lock()
+		payload := map[string]any{
+			"ok":       true,
+			"scenario": s.scenario,
+			"seed":     s.seed,
+			"auto":     s.auto,
+			"frames":   len(s.cycle),
+		}
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, payload)
+	case http.MethodPost:
+		var payload scenarioPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid json"})
+			return
+		}
+
+		scenario := normalizeScenario(payload.Scenario)
+		seed := int64(42)
+		if payload.Seed != nil {
+			seed = *payload.Seed
+		}
+		applyAuto := s.auto
+		if payload.Auto != nil {
+			applyAuto = *payload.Auto
+		}
+
+		now := time.Now()
+		s.mu.Lock()
+		s.scenario = scenario
+		s.seed = seed
+		s.auto = applyAuto
+		s.cycle = buildScenarioCycle(scenario, seed)
+		s.cycleIndex = 0
+		s.nextCycleAt = time.Time{}
+		s.applyCycleFrameLocked(now)
+		err := s.writeScaleAndZebraLocked(now)
+		s.mu.Unlock()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":       true,
+			"scenario": scenario,
+			"seed":     seed,
+			"auto":     applyAuto,
+			"frames":   len(s.cycle),
+		})
+	default:
+		writeMethodNotAllowed(w)
+	}
+}
+
 func (s *simulator) handleWeight(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeMethodNotAllowed(w)
@@ -504,11 +719,7 @@ func (s *simulator) handleWeight(w http.ResponseWriter, r *http.Request) {
 	s.scaleScale.Stable = &stable
 	s.scaleScale.Source = "polygon"
 	s.scaleScale.Port = "polygon://scale"
-	if weight == 0 {
-		s.scaleRaw = "0.000 " + unit
-	} else {
-		s.scaleRaw = formatScaleRaw(weight, stable)
-	}
+	s.scaleRaw = formatScaleRaw(weight, stable)
 	s.scaleScale.Error = ""
 	err := s.writeScaleAndZebraLocked(now)
 	s.mu.Unlock()
@@ -536,11 +747,11 @@ func (s *simulator) handleReset(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.auto = false
 	zero := 0.0
-	stable := false
+	stable := true
 	s.scaleScale.Weight = &zero
 	s.scaleScale.Stable = &stable
 	s.scaleScale.Unit = "kg"
-	s.scaleRaw = "0.000 kg"
+	s.scaleRaw = formatScaleRaw(zero, stable)
 	s.scaleScale.Error = ""
 	err := s.writeScaleAndZebraLocked(now)
 	s.mu.Unlock()
