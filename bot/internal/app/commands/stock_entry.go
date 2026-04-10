@@ -54,12 +54,12 @@ func HandleWarehouseSelected(ctx context.Context, deps Deps, chatID int64, itemC
 	keyboard := &telegram.InlineKeyboardMarkup{
 		InlineKeyboard: [][]telegram.InlineKeyboardButton{
 			{
-				{Text: "Material Receipt", CallbackData: StockEntryCallbackMaterialReceipt},
+				{Text: "Batch Start", CallbackData: StockEntryCallbackBatchStart},
 			},
 		},
 	}
 
-	text := fmt.Sprintf("Item tanlandi: %s\nKod: %s\nOmbor tanlandi: %s\nStock entry tanlang:", itemName, itemCode, warehouse)
+	text := fmt.Sprintf("Item tanlandi: %s\nKod: %s\nOmbor tanlandi: %s\nBatchni boshlash uchun Batch Start ni bosing.", itemName, itemCode, warehouse)
 	return deps.TG.SendMessageWithInlineKeyboard(ctx, chatID, text, keyboard)
 }
 
