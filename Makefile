@@ -103,8 +103,6 @@ run-dev:
 		if [ -n "$$SCALE_PID" ]; then kill "$$SCALE_PID" 2>/dev/null || true; fi; \
 		if [ -n "$$MOBILEAPI_PID" ]; then kill "$$MOBILEAPI_PID" 2>/dev/null || true; fi; \
 		if [ -n "$$POLY_PID" ]; then kill "$$POLY_PID" 2>/dev/null || true; fi; \
-		pgrep -f 'script -q $(SCALE_DEV_LAUNCH_LOG)' | xargs -r kill 2>/dev/null || true; \
-		pgrep -f 'go run . --no-bot --no-zebra --bridge-url http://$(POLYGON_HTTP_ADDR)/api/v1/scale --bridge-state-file $(BRIDGE_STATE_FILE)' | xargs -r kill 2>/dev/null || true; \
 		pgrep -f '[/]tmp/gscale-zebra/mobileapi-dev' | xargs -r kill 2>/dev/null || true; \
 		pgrep -f '[/]tmp/gscale-zebra/polygon-dev' | xargs -r kill 2>/dev/null || true; \
 		rm -f /tmp/gscale-zebra/mobileapi.pid /tmp/gscale-zebra/polygon.pid /tmp/gscale-zebra/scale.pid; \
@@ -133,29 +131,30 @@ run-dev:
 		fi; \
 		sleep 1; \
 	done; \
-	if ! $(CURL) -fsS "http://127.0.0.1:8081/healthz" >/dev/null 2>&1; then \
-		echo "run-dev: mobileapi failed to start"; \
-		sed -n '1,160p' /tmp/gscale-zebra/mobileapi.log; \
-		exit 1; \
-	fi; \
-	rm -f "$(SCALE_DEV_LAUNCH_LOG)"; \
-	script -q "$(SCALE_DEV_LAUNCH_LOG)" zsh -lc 'cd "$(CURDIR)/scale" && go run . --no-bot --no-zebra --bridge-url "http://$(POLYGON_HTTP_ADDR)/api/v1/scale" --bridge-state-file "$(BRIDGE_STATE_FILE)"' >/dev/null 2>&1 & \
-	SCALE_PID=$$!; \
-	echo "$$SCALE_PID" >/tmp/gscale-zebra/scale.pid; \
-	sleep 1; \
-	if ! kill -0 "$$SCALE_PID" >/dev/null 2>&1; then \
-		echo "run-dev: scale failed to start"; \
-		sed -n '1,160p' "$(SCALE_DEV_LAUNCH_LOG)"; \
-		exit 1; \
-	fi; \
+		if ! $(CURL) -fsS "http://127.0.0.1:8081/healthz" >/dev/null 2>&1; then \
+			echo "run-dev: mobileapi failed to start"; \
+			sed -n '1,160p' /tmp/gscale-zebra/mobileapi.log; \
+			exit 1; \
+		fi; \
+		: > "$(SCALE_DEV_LAUNCH_LOG)"; \
+		script -q -c 'cd "$(CURDIR)/scale" && exec go run . --no-bot --no-zebra --bridge-url "http://$(POLYGON_HTTP_ADDR)/api/v1/scale" --bridge-state-file "$(BRIDGE_STATE_FILE)"' "$(SCALE_DEV_LAUNCH_LOG)" >/dev/null 2>&1 & \
+		SCALE_PID=$$!; \
+		echo "$$SCALE_PID" >/tmp/gscale-zebra/scale.pid; \
+		sleep 2; \
+		if ! kill -0 "$$SCALE_PID" >/dev/null 2>&1; then \
+			echo "run-dev: scale failed to start"; \
+			sed -n '1,160p' "$(SCALE_DEV_LAUNCH_LOG)"; \
+			exit 1; \
+		fi; \
 	printf '[run-dev] 1/3 simulator ready: http://%s\n' "$(POLYGON_HTTP_ADDR)"; \
 	printf '[run-dev] 2/3 mobileapi ready: http://127.0.0.1:8081\n'; \
 	printf '[run-dev] 3/3 core ready:      scale running in background\n'; \
 	while :; do sleep 1; done
 
 stop-dev-services:
-	@pgrep -f 'script -q /tmp/gscale-zebra/scale-dev.log' | xargs -r kill 2>/dev/null || true
-	@pgrep -f 'go run . --no-bot --no-zebra --bridge-url http://127.0.0.1:18000/api/v1/scale --bridge-state-file /tmp/gscale-zebra/bridge_state.json' | xargs -r kill 2>/dev/null || true
+	@if [ -f /tmp/gscale-zebra/scale.pid ]; then kill $$(cat /tmp/gscale-zebra/scale.pid) 2>/dev/null || true; fi
+	@if [ -f /tmp/gscale-zebra/mobileapi.pid ]; then kill $$(cat /tmp/gscale-zebra/mobileapi.pid) 2>/dev/null || true; fi
+	@if [ -f /tmp/gscale-zebra/polygon.pid ]; then kill $$(cat /tmp/gscale-zebra/polygon.pid) 2>/dev/null || true; fi
 	@pgrep -f '[/]tmp/gscale-zebra/mobileapi-dev' | xargs -r kill 2>/dev/null || true
 	@pgrep -f '[/]tmp/gscale-zebra/polygon-dev' | xargs -r kill 2>/dev/null || true
 	@rm -f /tmp/gscale-zebra/mobileapi.pid /tmp/gscale-zebra/polygon.pid /tmp/gscale-zebra/scale.pid
