@@ -16,9 +16,10 @@ const (
 	printRequestMarkDone      printRequestDecision = "mark_done"
 	printRequestExecute       printRequestDecision = "execute"
 	printRequestErrorDisabled printRequestDecision = "error_disabled"
+	printRequestExternalExec  printRequestDecision = "external_exec"
 )
 
-func decidePendingPrintRequest(req bridgestate.PrintRequestSnapshot, zebra ZebraStatus, activeEPC string, zebraEnabled bool) printRequestDecision {
+func decidePendingPrintRequest(req bridgestate.PrintRequestSnapshot, zebra ZebraStatus, activeEPC string, zebraEnabled bool, rd Reading) printRequestDecision {
 	epc := strings.ToUpper(strings.TrimSpace(req.EPC))
 	if epc == "" {
 		return printRequestNoop
@@ -33,6 +34,9 @@ func decidePendingPrintRequest(req bridgestate.PrintRequestSnapshot, zebra Zebra
 		return printRequestMarkDone
 	}
 	if !zebraEnabled {
+		if strings.HasPrefix(strings.TrimSpace(rd.Port), "polygon://") {
+			return printRequestExternalExec
+		}
 		return printRequestErrorDisabled
 	}
 	return printRequestExecute
@@ -75,7 +79,7 @@ func (m *tuiModel) syncPendingPrintRequest(now time.Time) tea.Cmd {
 	if itemLabel == "" {
 		itemLabel = strings.TrimSpace(req.ItemCode)
 	}
-	switch decidePendingPrintRequest(req, m.zebra, m.activePrintRequestEPC, m.zebraUpdates != nil) {
+	switch decidePendingPrintRequest(req, m.zebra, m.activePrintRequestEPC, m.zebraUpdates != nil, m.last) {
 	case printRequestMarkDone:
 		lg.Printf("request already satisfied: epc=%s item=%s qty=%s", epc, itemLabel, qtyText)
 		if err := writePrintRequestStatus(m.bridgeStore, epc, "done", ""); err != nil {
@@ -91,6 +95,10 @@ func (m *tuiModel) syncPendingPrintRequest(now time.Time) tea.Cmd {
 			return nil
 		}
 		m.info = "print request xato: zebra disabled"
+		return nil
+	case printRequestExternalExec:
+		lg.Printf("request delegated: polygon fake zebra will handle epc=%s item=%s qty=%s", epc, itemLabel, qtyText)
+		m.info = "print request delegated to polygon: epc=" + epc
 		return nil
 	case printRequestExecute:
 		lg.Printf("request queued: epc=%s item=%s qty=%s -> fake zebra encode", epc, itemLabel, qtyText)

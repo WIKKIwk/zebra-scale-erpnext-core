@@ -12,20 +12,24 @@ func TestDecidePendingPrintRequest(t *testing.T) {
 		Status: "pending",
 	}
 
-	if got := decidePendingPrintRequest(req, ZebraStatus{}, "", false); got != printRequestErrorDisabled {
+	if got := decidePendingPrintRequest(req, ZebraStatus{}, "", false, Reading{}); got != printRequestErrorDisabled {
 		t.Fatalf("disabled decision mismatch: got=%s", got)
 	}
 
-	if got := decidePendingPrintRequest(req, ZebraStatus{}, "", true); got != printRequestExecute {
+	if got := decidePendingPrintRequest(req, ZebraStatus{}, "", false, Reading{Port: "polygon://scale"}); got != printRequestExternalExec {
+		t.Fatalf("polygon bridge decision mismatch: got=%s", got)
+	}
+
+	if got := decidePendingPrintRequest(req, ZebraStatus{}, "", true, Reading{}); got != printRequestExecute {
 		t.Fatalf("execute decision mismatch: got=%s", got)
 	}
 
-	if got := decidePendingPrintRequest(req, ZebraStatus{}, "3034257BF7194E406994036B", true); got != printRequestNoop {
+	if got := decidePendingPrintRequest(req, ZebraStatus{}, "3034257BF7194E406994036B", true, Reading{}); got != printRequestNoop {
 		t.Fatalf("active request should noop: got=%s", got)
 	}
 
 	zebra := ZebraStatus{LastEPC: "3034257BF7194E406994036B"}
-	if got := decidePendingPrintRequest(req, zebra, "", true); got != printRequestMarkDone {
+	if got := decidePendingPrintRequest(req, zebra, "", true, Reading{}); got != printRequestMarkDone {
 		t.Fatalf("matching epc should mark done: got=%s", got)
 	}
 }

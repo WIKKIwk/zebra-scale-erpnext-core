@@ -84,6 +84,7 @@ run-polygon:
 
 run-test:
 	@mkdir -p /tmp/gscale-zebra
+	@rm -f "$(BRIDGE_STATE_FILE)" "$(BRIDGE_STATE_FILE).lock"
 	@POLY_PID=""; \
 	trap 'if [ -n "$$POLY_PID" ]; then kill $$POLY_PID 2>/dev/null || true; fi' EXIT INT TERM; \
 	(cd polygon && go run . --http-addr "$(POLYGON_HTTP_ADDR)" --bridge-state-file "$(BRIDGE_STATE_FILE)" --scenario "$(POLYGON_SCENARIO)" --seed "$(POLYGON_SEED)" >/tmp/gscale-zebra/polygon.log 2>&1) & \
@@ -94,6 +95,7 @@ run-test:
 run-dev:
 	@mkdir -p /tmp/gscale-zebra
 	@$(MAKE) stop-dev-services >/dev/null 2>&1 || true
+	@rm -f "$(BRIDGE_STATE_FILE)" "$(BRIDGE_STATE_FILE).lock"
 	@go build -o "$(POLYGON_DEV_BIN)" ./polygon
 	@go build -o "$(MOBILEAPI_DEV_BIN)" ./cmd/mobileapi
 	@POLY_PID=""; \
